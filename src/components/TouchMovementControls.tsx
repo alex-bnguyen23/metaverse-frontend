@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, type PointerEvent } from "react";
-import "./TouchMovementControls.css";
 
 export type TouchDirection = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" | "ShiftLeft";
 
