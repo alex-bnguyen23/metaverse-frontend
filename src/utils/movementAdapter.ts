@@ -1,12 +1,11 @@
-type Direction = -1 | 0 | 1;
 export type LocalMovement = { x: number; z: number; running: boolean };
 
-/** Convert viewpoint-relative keys into a normalized world direction for local physics.
+/** Convert viewpoint-relative keyboard or joystick axes into a normalized world direction for local physics.
  * This is local intent only; the socket publishes the resulting position, never these axes.
  */
 export function adaptMovementInput(
-  forward: Direction,
-  right: Direction,
+  forward: number,
+  right: number,
   running: boolean,
   viewDirection: { x: number; z: number },
 ): LocalMovement {
