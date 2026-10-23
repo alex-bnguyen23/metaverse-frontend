@@ -133,7 +133,18 @@ export default function World({
 
     // Remember held keys so movement is independent of keyboard repeat events.
     const keys = new Set<string>();
-    const inputCodes = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ShiftLeft", "ShiftRight"]);
+    const inputCodes = new Set([
+      "KeyW",
+      "KeyA",
+      "KeyS",
+      "KeyD",
+      "ArrowUp",
+      "ArrowLeft",
+      "ArrowDown",
+      "ArrowRight",
+      "ShiftLeft",
+      "ShiftRight",
+    ]);
     const onKeyDown = (event: KeyboardEvent) => {
       if (preview) return;
       // Leave keyboard input alone while the user is editing a field.
@@ -273,8 +284,12 @@ export default function World({
       const delta = Math.min(clock.getDelta(), 0.05);
       previousPosition.copy(player.position);
       if (session) {
-        const forward = Number(keys.has("KeyW")) - Number(keys.has("KeyS"));
-        const right = Number(keys.has("KeyD")) - Number(keys.has("KeyA"));
+        const forward =
+          Number(keys.has("KeyW") || keys.has("ArrowUp")) -
+          Number(keys.has("KeyS") || keys.has("ArrowDown"));
+        const right =
+          Number(keys.has("KeyD") || keys.has("ArrowRight")) -
+          Number(keys.has("KeyA") || keys.has("ArrowLeft"));
         camera.getWorldDirection(viewDirection);
         if (physics && session.playerId && networkCharacters) {
           const local = session.players.get(session.playerId);
@@ -369,7 +384,7 @@ export default function World({
       >
         {preview
           ? "Drag: Rotate  Scroll: Zoom"
-          : "WASD: Move Shift: Run  Drag: Look  Scroll: Zoom"}
+          : "WASD / Arrow keys: Move  Shift: Run  Drag: Look  Scroll: Zoom"}
       </div>
     </div>
   );
