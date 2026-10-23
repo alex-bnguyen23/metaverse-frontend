@@ -1,0 +1,2 @@
+/* Load Tailwind globally; App.css provides application-specific styling. */
+@import "tailwindcss";

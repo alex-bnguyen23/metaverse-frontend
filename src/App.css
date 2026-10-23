@@ -1,0 +1,222 @@
+/* Count padding and borders inside dimensions so panels fit the viewport. */
+* {
+  box-sizing: border-box;
+}
+
+/* Fill the viewport; the controls panel handles its own scrolling. */
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app {
+  width: 100vw;
+  height: 100dvh;
+}
+
+.character-chat-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.character-chat-bubble {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  width: max-content;
+  max-width: min(260px, 75vw);
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: white;
+  color: #203b30;
+  box-shadow: 0 3px 16px #0003;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.character-chat-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 7px solid transparent;
+  border-top-color: white;
+}
+
+/* Remove the inline baseline gap beneath the WebGL canvas. */
+canvas {
+  display: block;
+}
+body {
+  font-family: system-ui, sans-serif;
+  color: #203b30;
+  background: #f7f8f3;
+}
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  font: inherit;
+  cursor: pointer;
+}
+/* Keep controls readable and allow the preview to shrink in the remaining space.
+   dvh follows the visible viewport as mobile browser controls change size. */
+.dress-page {
+  height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  overflow: hidden;
+}
+/* Zero minimums let grid children shrink; overflow scrolls inside this panel. */
+.dress-options {
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 16px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+h1 {
+  font-size: clamp(28px, 3vw, 42px);
+  margin: 12px 0;
+  line-height: 1.1;
+}
+.dress-options > p {
+  margin: 4px 0;
+  line-height: 1.25;
+}
+.dress-options h1 {
+  font-size: 24px;
+  margin: 4px 0;
+}
+fieldset {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+legend {
+  font-weight: 650;
+  margin-bottom: 4px;
+}
+.choices {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.choices button {
+  padding: 5px 7px;
+  font-size: 12px;
+  background: white;
+  color: #203b30;
+  border: 1px solid #cbd6cc;
+  border-radius: 9px;
+}
+/* Match the visual selection to the state exposed to assistive technology. */
+.choices button[aria-pressed="true"] {
+  background: #234e3c;
+  color: white;
+  border-color: #234e3c;
+}
+.choices small {
+  opacity: 0.65;
+  margin-right: 4px;
+}
+/* Highlight keyboard focus without showing a ring on every pointer click. */
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid #dc9626;
+  outline-offset: 4px;
+}
+.save-status {
+  font-size: 12px;
+  color: #637369;
+}
+.primary-link,
+.back-link {
+  display: inline-block;
+  border-radius: 9px;
+  padding: 13px 20px;
+  background: #234e3c;
+  color: white;
+  text-decoration: none;
+  font-weight: 600;
+}
+.reset-button {
+  display: block;
+  border: 0;
+  background: transparent;
+  color: #52685c;
+  padding: 14px 0;
+}
+/* Prevent the canvas panel from forcing the grid beyond the viewport. */
+.character-preview {
+  min-height: 0;
+  min-width: 0;
+}
+/* Anchor navigation above the scene using this positioned parent. */
+.world-page {
+  height: 100dvh;
+  position: relative;
+}
+.back-link {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+}
+/* Stack controls above a bounded preview on narrow screens. */
+@media (max-width: 700px) {
+  .dress-page {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) min(28dvh, 180px);
+  }
+  .dress-options {
+    padding: 10px 12px;
+  }
+}
+
+.dress-options {
+  font-size: 12px;
+}
+/* Compact columns leave vertical room for actions and the preview. */
+.dress-option-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 8px;
+  margin: 12px 0;
+}
+.dress-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dress-actions .primary-link {
+  padding: 8px 10px;
+}
+.dress-actions .reset-button {
+  padding: 8px 0;
+}
+.dress-options .save-status {
+  font-size: 10px;
+}
+/* Short landscape screens need side-by-side panels to keep both usable. */
+@media (max-height: 500px) and (max-width: 700px) {
+  .dress-page {
+    grid-template-columns: minmax(260px, 55%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
