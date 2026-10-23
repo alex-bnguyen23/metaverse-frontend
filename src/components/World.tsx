@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import TouchMovementControls, { type TouchDirection } from "./TouchMovementControls";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -51,6 +52,10 @@ export default function World({
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const characterRef = useRef<THREE.Object3D | null>(null);
+  const touchDirections = useRef<ReadonlySet<TouchDirection>>(new Set());
+  const onTouchMovement = useCallback((directions: ReadonlySet<TouchDirection>) => {
+    touchDirections.current = directions;
+  }, []);
   // Async loading needs the latest choices even if they change during the download.
   const appearanceRef = useRef(appearance);
   // Update the existing model directly instead of rebuilding the scene for each selection.
@@ -165,6 +170,7 @@ export default function World({
     // Focus changes can hide keyup events; clear input to prevent stuck movement.
     const clearKeys = () => {
       keys.clear();
+      touchDirections.current = new Set();
       if (physics && session?.playerId && simulatedPlayerId === session.playerId) {
         physics.animation = "Idle";
         session.setMovement({
@@ -284,12 +290,13 @@ export default function World({
       const delta = Math.min(clock.getDelta(), 0.05);
       previousPosition.copy(player.position);
       if (session) {
+        const held = (code: TouchDirection) => keys.has(code) || touchDirections.current.has(code);
         const forward =
-          Number(keys.has("KeyW") || keys.has("ArrowUp")) -
-          Number(keys.has("KeyS") || keys.has("ArrowDown"));
+          Number(keys.has("KeyW") || held("ArrowUp")) -
+          Number(keys.has("KeyS") || held("ArrowDown"));
         const right =
-          Number(keys.has("KeyD") || keys.has("ArrowRight")) -
-          Number(keys.has("KeyA") || keys.has("ArrowLeft"));
+          Number(keys.has("KeyD") || held("ArrowRight")) -
+          Number(keys.has("KeyA") || held("ArrowLeft"));
         camera.getWorldDirection(viewDirection);
         if (physics && session.playerId && networkCharacters) {
           const local = session.players.get(session.playerId);
@@ -302,7 +309,7 @@ export default function World({
               adaptMovementInput(
                 forward as -1 | 0 | 1,
                 right as -1 | 0 | 1,
-                keys.has("ShiftLeft") || keys.has("ShiftRight"),
+                held("ShiftLeft") || keys.has("ShiftRight"),
                 viewDirection,
               ),
               delta,
@@ -340,6 +347,7 @@ export default function World({
       networkCharacters?.dispose();
       physics?.dispose();
       characterRef.current = null;
+      touchDirections.current = new Set();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", clearKeys);
@@ -360,6 +368,7 @@ export default function World({
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }} />
+      {!preview && <TouchMovementControls onChange={onTouchMovement} />}
       {worldMessage && (
         <div
           role="status"
@@ -370,6 +379,7 @@ export default function World({
       )}
       {/* Ignore pointer events on the instructions so dragging still reaches the canvas. */}
       <div
+        className={preview ? undefined : "world-keyboard-hint"}
         style={{
           position: "absolute",
           bottom: preview ? 20 : 120,

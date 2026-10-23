@@ -220,3 +220,41 @@ a:focus-visible {
     grid-template-rows: minmax(0, 1fr);
   }
 }
+
+/* For touch-pad keyboard when in phone or tablet mode */
+.touch-movement-controls {
+  display: none;
+  position: absolute;
+  bottom: calc(125px + env(safe-area-inset-bottom, 0px));
+  right: max(16px, env(safe-area-inset-right, 0px));
+  z-index: 10;
+  grid-template-columns: repeat(3, 48px);
+  grid-template-rows: repeat(2, 48px);
+  gap: 6px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touch-movement-controls button {
+  border: 1px solid #ffffff80;
+  border-radius: 12px;
+  background: #203b30cc;
+  color: white;
+  font-size: 26px;
+  touch-action: none;
+}
+
+.touch-movement-controls button:active {
+  background: #48765e;
+}
+
+@media (max-width: 1024px), (any-pointer: coarse) {
+  .touch-movement-controls {
+    display: grid;
+  }
+
+  .world-keyboard-hint {
+    display: none;
+  }
+}
