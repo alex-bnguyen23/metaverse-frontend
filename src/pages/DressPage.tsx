@@ -37,7 +37,7 @@ export default function DressPage({
             <input
               className="mt-1 block w-full rounded border border-green-900/20 bg-white p-2"
               value={name}
-              maxLength={32}
+              maxLength={24}
               onChange={(event) => setName(event.target.value)}
             />
           </label>

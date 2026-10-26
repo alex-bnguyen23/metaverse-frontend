@@ -10,6 +10,8 @@ import { CharacterChatBubbles } from "./CharacterChatBubbles";
 import { adaptMovementInput } from "../utils/movementAdapter";
 import { initializePhysics, WorldPhysics } from "../physics/WorldPhysics";
 
+import { VehicleController } from "../vehicles/VehicleController";
+
 type MovementState = "Idle" | "Walk" | "Run";
 /** Release GPU resources, collecting shared assets in sets to avoid disposing them repeatedly. */
 function disposeModel(root: THREE.Object3D) {
@@ -50,6 +52,9 @@ export default function World({
   const [worldMessage, setWorldMessage] = useState<string | null>(
     preview ? null : "Loading world physics...",
   );
+  const vehicleButtonRef = useRef<HTMLButtonElement>(null);
+  const vehicleStatusRef = useRef<HTMLDivElement>(null);
+  const interactRef = useRef<() => void>(() => {});
   const containerRef = useRef<HTMLDivElement>(null);
   const characterRef = useRef<THREE.Object3D | null>(null);
   const touchInput = useRef<JoystickInput>({ forward: 0, right: 0, running: false });
@@ -82,7 +87,9 @@ export default function World({
       ? null
       : new MultiplayerSession(
           import.meta.env.VITE_WS_URL ||
-            (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws",
+            (location.protocol === "https:"
+              ? "wss://" + location.host + "/"
+              : "ws://localhost:3000/"),
           name,
           { ...appearanceRef.current },
           (status) => statusRef.current?.(status),
@@ -91,6 +98,11 @@ export default function World({
     sessionCallbackRef.current?.(session);
     let networkCharacters: NetworkCharacters | undefined;
     let physics: WorldPhysics | undefined;
+    let vehicleController: VehicleController | undefined;
+    let releaseVersion = 0;
+    interactRef.current = () => {
+      if (session && physics && vehicleController) vehicleController.interact(session, physics);
+    };
     let simulatedPlayerId: string | null = null;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(preview ? 0xe8eee9 : 0x87ceeb);
@@ -159,6 +171,10 @@ export default function World({
           /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(event.target.tagName))
       )
         return;
+      if (event.code === "KeyE" && !event.repeat) {
+        event.preventDefault();
+        interactRef.current();
+      }
       if (inputCodes.has(event.code)) {
         event.preventDefault();
         keys.add(event.code);
@@ -171,7 +187,12 @@ export default function World({
     const clearKeys = () => {
       keys.clear();
       touchInput.current = { forward: 0, right: 0, running: false };
-      if (physics && session?.playerId && simulatedPlayerId === session.playerId) {
+      if (
+        physics &&
+        session?.playerId &&
+        !session.driving &&
+        simulatedPlayerId === session.playerId
+      ) {
         physics.animation = "Idle";
         session.setMovement({
           position: physics.position,
@@ -223,6 +244,15 @@ export default function World({
             .then(() => {
               if (disposed) return;
               physics = new WorldPhysics(gltf.scene);
+              vehicleController = new VehicleController(gltf.scene);
+              const initialPosition = vehicleController.root.getWorldPosition(new THREE.Vector3());
+              physics.setTruck(
+                initialPosition,
+                new THREE.Euler().setFromQuaternion(
+                  vehicleController.root.getWorldQuaternion(new THREE.Quaternion()),
+                  "YXZ",
+                ).y,
+              );
               setWorldMessage(null);
             })
             .catch((error: unknown) => {
@@ -301,11 +331,15 @@ export default function World({
         camera.getWorldDirection(viewDirection);
         if (physics && session.playerId && networkCharacters) {
           const local = session.players.get(session.playerId);
-          if (local && simulatedPlayerId !== session.playerId) {
+          if (
+            local &&
+            (simulatedPlayerId !== session.playerId || releaseVersion !== session.releaseVersion)
+          ) {
+            releaseVersion = session.releaseVersion;
             physics.spawn(local.position, local.rotation);
             simulatedPlayerId = session.playerId;
           }
-          if (local) {
+          if (local && !session.driving) {
             physics.update(
               adaptMovementInput(
                 forward,
@@ -322,10 +356,38 @@ export default function World({
             });
           }
         }
+        if (physics) vehicleController?.update(session, physics, forward, right, delta);
         if (!session.playerId) simulatedPlayerId = null;
         networkCharacters?.update(session.players, delta, session.playerId);
         const own = session.playerId ? networkCharacters?.objects.get(session.playerId) : undefined;
         if (own) player.position.copy(own.position);
+        for (const [id, object] of networkCharacters?.objects ?? [])
+          object.visible = id !== session.vehicle?.driverId;
+        if (session.driving && vehicleController?.position)
+          player.position.copy(vehicleController.position);
+        const v = session.vehicle;
+        const near =
+          !!v &&
+          !!physics &&
+          Math.hypot(
+            physics.position.x - v.position.x,
+            physics.position.y - v.position.y,
+            physics.position.z - v.position.z,
+          ) <= 3;
+        if (vehicleButtonRef.current) {
+          vehicleButtonRef.current.hidden = !session.driving && !near;
+          vehicleButtonRef.current.disabled =
+            session.vehiclePending || (!!v?.driverId && !session.driving);
+          vehicleButtonRef.current.textContent = session.vehiclePending
+            ? "Waiting for server..."
+            : session.driving
+              ? "Exit truck (E)"
+              : v?.driverId
+                ? "Truck occupied"
+                : "Drive truck (E)";
+        }
+        if (vehicleStatusRef.current)
+          vehicleStatusRef.current.textContent = session.vehicleError ?? "";
       }
       // Keep idle and preview animations advancing even when the player is not moving.
       mixer?.update(delta);
@@ -342,6 +404,7 @@ export default function World({
     // Stop rendering before disposing GPU resources to avoid using released assets.
     return () => {
       disposed = true;
+      interactRef.current = () => {};
       session?.stop();
       chatBubbles?.dispose();
       sessionCallbackRef.current?.(null);
@@ -370,6 +433,26 @@ export default function World({
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }} />
       {!preview && <TouchJoystick onChange={onTouchMovement} />}
+      {!preview && (
+        <div className="absolute left-3 top-36 z-10">
+          <button
+            ref={vehicleButtonRef}
+            hidden
+            onClick={(event) => {
+              interactRef.current();
+              event.currentTarget.blur();
+            }}
+            className="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-60"
+          >
+            Drive truck (E)
+          </button>
+          <div
+            ref={vehicleStatusRef}
+            role="status"
+            className="mt-2 max-w-sm rounded bg-white/90 px-2 text-sm text-slate-900"
+          />
+        </div>
+      )}
       {worldMessage && (
         <div
           role="status"
@@ -395,7 +478,7 @@ export default function World({
       >
         {preview
           ? "Drag: Rotate  Scroll: Zoom"
-          : "WASD / Arrow keys: Move  Shift: Run  Drag: Look  Scroll: Zoom"}
+          : "WASD / Arrows: Move / Drive  Shift: Run  E: Enter / Exit truck  Drag: Look"}
       </div>
     </div>
   );

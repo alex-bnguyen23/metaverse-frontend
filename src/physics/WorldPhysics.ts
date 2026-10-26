@@ -60,6 +60,7 @@ export class WorldPhysics {
   private readonly capsule = this.world.createCollider(
     RAPIER.ColliderDesc.capsule(HALF_HEIGHT, RADIUS),
   );
+  private truck: RAPIER.Collider | undefined;
   private water: RAPIER.Collider | undefined;
   private velocityY = 0;
   private accumulator = 0;
@@ -72,7 +73,12 @@ export class WorldPhysics {
       if (!(object instanceof THREE.Mesh) || !object.geometry.getAttribute("position")) return;
       let parent: THREE.Object3D | null = object;
       while (parent) {
-        if (!parent.visible || parent.userData.collision === "none") return;
+        if (
+          !parent.visible ||
+          parent.userData.collision === "none" ||
+          /Cybertruck.*drive[_ ]control/.test(parent.name)
+        )
+          return;
         parent = parent.parent;
       }
       const materials = Array.isArray(object.material) ? object.material : [object.material];
@@ -93,6 +99,119 @@ export class WorldPhysics {
     this.controller.setApplyImpulsesToDynamicBodies(false);
     this.world.timestep = STEP;
     this.world.step();
+  }
+
+  /** Keep the authored truck out of the baked map and move a single reusable solid with it. */
+  setTruck(position: Vector3, rotation: number) {
+    if (!this.truck)
+      this.truck = this.world.createCollider(RAPIER.ColliderDesc.cuboid(3, 1.05, 1.27));
+    this.truck.setTranslation({
+      x: position.x + 0.07 * Math.cos(rotation),
+      y: position.y + 1.15,
+      z: position.z - 0.07 * Math.sin(rotation),
+    });
+    this.truck.setRotation({ x: 0, y: Math.sin(rotation / 2), z: 0, w: Math.cos(rotation / 2) });
+    this.world.step();
+  }
+
+  private clearShape(
+    position: Vector3,
+    rotation: number,
+    shape: RAPIER.Shape,
+    ignoreTruck: boolean,
+  ) {
+    let clear = true;
+    this.world.intersectionsWithShape(
+      position,
+      { x: 0, y: Math.sin(rotation / 2), z: 0, w: Math.cos(rotation / 2) },
+      shape,
+      () => {
+        clear = false;
+        return false;
+      },
+      RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+      undefined,
+      this.capsule,
+      undefined,
+      (c) => !ignoreTruck || c.handle !== this.truck?.handle,
+    );
+    return clear;
+  }
+
+  /** Sample all four wheel contacts; reject water, ledges and unsupported vehicle footprints. */
+  vehicleGround(position: Vector3, rotation: number): number | null {
+    const heights: number[] = [];
+    for (const x of [-1.77, 1.79])
+      for (const z of [-1.015, 1.015]) {
+        const ray = new RAPIER.Ray(
+          {
+            x: position.x + x * Math.cos(rotation) + z * Math.sin(rotation),
+            y: position.y + 0.4,
+            z: position.z - x * Math.sin(rotation) + z * Math.cos(rotation),
+          },
+          { x: 0, y: -1, z: 0 },
+        );
+        const ground = this.world.castRay(
+          ray,
+          1,
+          false,
+          RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+          undefined,
+          this.capsule,
+          undefined,
+          (c) => c.handle !== this.truck?.handle,
+        );
+        if (!ground) return null;
+        const water = this.water?.castRay(ray, 1, false);
+        if (water !== undefined && water >= 0 && water < ground.timeOfImpact - 0.01) return null;
+        heights.push(ray.origin.y - ground.timeOfImpact);
+      }
+    if (Math.max(...heights) - Math.min(...heights) > 0.35) return null;
+    return Math.max(...heights);
+  }
+
+  canDrive(position: Vector3, rotation: number) {
+    return this.clearShape(
+      {
+        x: position.x + 0.07 * Math.cos(rotation),
+        y: position.y + 1.2,
+        z: position.z - 0.07 * Math.sin(rotation),
+      },
+      rotation,
+      new RAPIER.Cuboid(3, 1.05, 1.27),
+      true,
+    );
+  }
+
+  /** Exit candidates use the walking capsule and require real support outside the truck. */
+  findExit(position: Vector3, rotation: number): Vector3 | null {
+    for (const side of [1, -1]) {
+      const x = position.x + side * 2 * Math.sin(rotation);
+      const z = position.z + side * 2 * Math.cos(rotation);
+      const ray = new RAPIER.Ray({ x, y: position.y + 0.5, z }, { x: 0, y: -1, z: 0 });
+      const ground = this.world.castRay(
+        ray,
+        1,
+        false,
+        RAPIER.QueryFilterFlags.EXCLUDE_SENSORS,
+        undefined,
+        this.capsule,
+      );
+      if (!ground) continue;
+      const feet = { x, y: ray.origin.y - ground.timeOfImpact + 0.015, z };
+      if (x < -70 || x > 72 || z < -70 || z > 70 || feet.y < -2 || feet.y > 25) continue;
+      if (
+        this.safeGround(x, feet.y, z) &&
+        this.clearShape(
+          { x, y: feet.y + CENTER_HEIGHT, z },
+          0,
+          new RAPIER.Capsule(HALF_HEIGHT, RADIUS),
+          false,
+        )
+      )
+        return feet;
+    }
+    return null;
   }
 
   /** The server supplies the initial feet position; settle onto nearby authored ground. */

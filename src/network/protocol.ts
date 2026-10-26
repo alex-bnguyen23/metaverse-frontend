@@ -16,6 +16,20 @@ export type PlayerMovement = {
   rotation: number;
   animation: AnimationState;
 };
+export type VehicleState = {
+  id: "cybertruck-1";
+  driverId: string | null;
+  revision: number;
+  position: Vector3;
+  rotation: number;
+  speed: number;
+  steering: number;
+  wheelAngle: number;
+};
+export type VehicleMovement = Omit<VehicleState, "id" | "driverId"> & {
+  vehicleId: "cybertruck-1";
+  sequence: number;
+};
 export type ChatMessage = {
   id: string;
   senderId: string;
@@ -25,7 +39,18 @@ export type ChatMessage = {
 };
 export type ChatSendPayload = { text: string };
 export type ServerMessage =
-  | { type: "world:init"; payload: { playerId: string; players: PlayerState[] } }
+  | { type: "vehicle:occupied"; payload: { vehicle: VehicleState } }
+  | { type: "vehicle:update"; payload: { vehicle: VehicleState; sequence: number } }
+  | {
+      type: "vehicle:released";
+      payload:
+        | { vehicle: VehicleState; player: PlayerState; reason: "exit" }
+        | { vehicle: VehicleState; player: null; reason: "disconnect" };
+    }
+  | {
+      type: "world:init";
+      payload: { playerId: string; players: PlayerState[]; vehicles?: VehicleState[] };
+    }
   | { type: "player:joined"; payload: { player: PlayerState } }
   | {
       type: "player:update";
@@ -35,8 +60,23 @@ export type ServerMessage =
     }
   | { type: "player:left"; payload: { id: string } }
   | { type: "chat:message"; payload: ChatMessage }
-  | { type: "server:error"; payload: { code: string; message: string } };
+  | {
+      type: "server:error";
+      payload: {
+        code: string;
+        message: string;
+        requestType?: string;
+        vehicleId?: string;
+        revision?: number;
+      };
+    };
 export type ClientMessage =
+  | { type: "vehicle:enter"; payload: { vehicleId: "cybertruck-1"; revision: number } }
+  | { type: "vehicle:move"; payload: VehicleMovement }
+  | {
+      type: "vehicle:exit";
+      payload: { vehicleId: "cybertruck-1"; revision: number; position: Vector3; rotation: number };
+    }
   | { type: "player:join"; payload: { name: string; appearance: Appearance } }
   | { type: "player:move"; payload: PlayerMovement }
   | { type: "chat:send"; payload: ChatSendPayload };
@@ -73,6 +113,34 @@ function player(value: unknown): value is PlayerState {
     transform(value)
   );
 }
+const integer = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+export function vehicle(value: unknown): value is VehicleState {
+  if (!record(value) || !record(value.position)) return false;
+  const p = value.position;
+  return (
+    value.id === "cybertruck-1" &&
+    (value.driverId === null || id(value.driverId)) &&
+    integer(value.revision) &&
+    finite(p.x) &&
+    finite(p.y) &&
+    finite(p.z) &&
+    p.x >= -70 &&
+    p.x <= 72 &&
+    p.y >= -2 &&
+    p.y <= 25 &&
+    p.z >= -70 &&
+    p.z <= 70 &&
+    finite(value.rotation) &&
+    finite(value.speed) &&
+    value.speed >= -4 &&
+    value.speed <= 10 &&
+    finite(value.steering) &&
+    Math.abs(value.steering) <= Math.PI / 6 &&
+    finite(value.wheelAngle) &&
+    (value.driverId !== null || (value.speed === 0 && value.steering === 0))
+  );
+}
 /** Reject malformed and unknown wire messages before they can reach scene state. */
 export function parseServerMessage(data: unknown): ServerMessage | null {
   if (typeof data !== "string") return null;
@@ -92,6 +160,15 @@ export function parseServerMessage(data: unknown): ServerMessage | null {
         Array.isArray(p.players) &&
         p.players.length <= 5 &&
         p.players.every(player) &&
+        (p.vehicles === undefined ||
+          (Array.isArray(p.vehicles) &&
+            p.vehicles.length === 1 &&
+            p.vehicles.every(vehicle) &&
+            p.vehicles.every(
+              (v) =>
+                v.driverId === null ||
+                (p.players as PlayerState[]).some((player) => player.id === v.driverId),
+            ))) &&
         new Set(p.players.map((p) => p.id)).size === p.players.length &&
         p.players.some((player) => player.id === p.playerId);
       break;
@@ -106,11 +183,29 @@ export function parseServerMessage(data: unknown): ServerMessage | null {
         Number.isSafeInteger(p.sequence) &&
         p.sequence >= 0;
       break;
+    case "vehicle:occupied":
+      valid = vehicle(p.vehicle) && p.vehicle.driverId !== null;
+      break;
+    case "vehicle:update":
+      valid = vehicle(p.vehicle) && p.vehicle.driverId !== null && integer(p.sequence);
+      break;
+    case "vehicle:released":
+      valid =
+        vehicle(p.vehicle) &&
+        p.vehicle.driverId === null &&
+        ((p.reason === "exit" && player(p.player) && p.player.animation === "Idle") ||
+          (p.reason === "disconnect" && p.player === null));
+      break;
     case "player:left":
       valid = id(p.id);
       break;
     case "server:error":
-      valid = id(p.code) && typeof p.message === "string";
+      valid =
+        id(p.code) &&
+        typeof p.message === "string" &&
+        (p.requestType === undefined || id(p.requestType)) &&
+        (p.vehicleId === undefined || p.vehicleId === "cybertruck-1") &&
+        (p.revision === undefined || integer(p.revision));
       break;
     case "chat:message":
       valid =

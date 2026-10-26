@@ -6,7 +6,7 @@ The game supports real-time text chat between players in one shared room.
 
 - Maximum 5 players in one room.
 - All connected and joined players can send and receive chat messages.
-- Use the existing WebSocket connection at `/ws`.
+- Use the existing WebSocket connection configured by `VITE_WS_URL`, as described in `WEBSOCKET.md` (local default `ws://localhost:3000/`).
 - Do not create a separate WebSocket connection for chat.
 - Use the standard message envelope: `{ "type": "...", "payload": { ... } }`.
 - The backend is authoritative for chat messages.

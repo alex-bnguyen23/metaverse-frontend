@@ -1,12 +1,14 @@
 # Running multiplayer
 
 1. Copy `.env.example` to `.env.local` and set `VITE_WS_URL` to the backend's actual WebSocket URL, including its path. Restart Vite after changing it. Use `wss://` when serving the frontend over HTTPS.
-2. Start the separate Node.js backend implementing `PROTOCOLS.md`. Without `VITE_WS_URL`, the client tries `/ws` on the frontend host; the Vite development server does not provide a multiplayer backend.
+2. Start the separate Node.js backend implementing `WEBSOCKET.md` and `PROTOCOLS.md`. Without `VITE_WS_URL`, HTTP development connects to `ws://localhost:3000/`; HTTPS connects to `wss://<frontend-host>/`. Configure the actual backend URL for deployment; Vite does not provide a multiplayer backend.
 3. Open the frontend in two browser tabs. Choose each player's name and appearance in the dressing room, then enter the world.
 4. Check that both characters appear, movement and animations synchronize, and leaving removes the character from the other tab. Five clients may join; the backend must reject a sixth with `server:error` / `ROOM_FULL`.
 5. Restart the backend to check reconnect behavior. Each reconnect sends a fresh join with the same name and appearance and accepts the new backend-assigned ID.
 
 The frontend calculates local movement and Rapier collision results, then sends `player:move` with `sequence`, `position: { x, y, z }`, `rotation`, and `animation`. The existing socket publishes changed states at a maximum of 20 Hz, including a final Idle state. It sends no unchanged states, player IDs, or appearance in movement messages. The backend supplies the initial spawn in `world:init`, stores accepted reported states, and forwards them to other players. It must implement the updated protocol; older input-simulation backends are incompatible.
+
+The client follows `WEBSOCKET.md`: names are trimmed and restricted to 1–24 characters, walking and vehicle movement use separate rolling 20-message budgets, and enter/exit share a rolling two-request budget. JSON payloads exceeding 4 KiB are not sent; a backed-up socket defers movement rather than building a stale queue. Vehicle exits wait for the server acknowledgement of the final stopped report. Walking positions retain finite-number validation without vehicle coordinate bounds.
 
 WASD and the arrow keys follow the camera viewpoint continuously. Up/Down/Left/Right are alternatives to W/S/A/D, and Shift runs with either set of keys. Holding both keys for the same direction does not increase speed. Movement keys prevent browser scrolling during gameplay and remain available for editing when chat is focused. `movementAdapter.ts` translates keys into a normalized local world direction, including equal-speed diagonals. Local transforms render immediately; only remote players are interpolated. Incoming updates must include a nonnegative integer sequence. Duplicate, stale, and out-of-order remote sequences are ignored. Self echoes never overwrite local simulation. Reconnects use the new server-supplied spawn and restart outgoing sequences.
 
@@ -29,6 +31,16 @@ node --test tests/multiplayer.test.mjs
 ```
 
 These checks use a controlled WebSocket transport. They do not replace testing against the actual backend or checking the Blender assets visually.
+
+## Driving the shared Cybertruck
+
+Driving the shared Cybertruck is implemented in the frontend using the vehicle extension in `PROTOCOLS.md`. The separate backend must include `world:init.payload.vehicles` and implement the vehicle events before driving is enabled. Older servers omitting vehicles still allow walking and chat.
+
+Approach the truck at (-35, 0, 0), then press E or tap Drive truck. Wait for the server seat grant. WASD/arrows or the touch joystick accelerate/reverse and steer relative to the vehicle; the camera orbits and follows it. Shift does not boost vehicle speed. Press E or tap Exit truck to brake and request a safe exit. If both sides are blocked, move to clear ground and try again. The standing driver model is hidden while driving.
+
+The truck is excluded from baked static geometry and uses a reusable moving collision box for walking. Driving tests the body and four wheel support points in substeps, rejecting water, obstacles and unsupported terrain. Steep or uneven terrain is conservatively blocked; the truck remains upright without suspension simulation. Assets are reused and physics resources are released with the world.
+
+Verify with a compatible backend: join two clients, race to enter (only one grant), observe driving and wheel spin on both, stop and exit, block both exit sides, join while occupied, disconnect the driver, and reconnect. Confirm the parked position is retained, the old spawn has no invisible truck collider, and walking/chat still work. Automated vehicle coverage is in `tests/multiplayer.test.mjs`; it does not replace a live backend/browser check.
 
 ## World chat
 
