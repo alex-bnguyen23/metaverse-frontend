@@ -20,6 +20,7 @@ export type FramePicture = {
   revision: number;
   imageUrl: string | null;
   updatedAt: number | null;
+  mediaType?: "image" | "video"; // Omitted by legacy image-only backends.
 };
 
 export type FramePicturesResponse = {
@@ -73,7 +74,7 @@ Read both records from one consistent committed metadata snapshot. A frame witho
 
 Public upload-and-replace endpoint. No login or joined WebSocket session is required in this initial version. Any visitor can replace either frame, as requested. Apply the same file validation and rate limits to all visitors.
 
-Request: `multipart/form-data` containing exactly one file field named `image`. Do not accept extra files or form fields. The browser must generate the multipart boundary; do not manually set the `Content-Type` header when sending `FormData`.
+Request: `multipart/form-data` containing exactly one file field named `image` (this legacy field name also carries video files). Do not accept extra files or form fields. The browser must generate the multipart boundary; do not manually set the `Content-Type` header when sending `FormData`.
 
 ```ts
 const form = new FormData();
@@ -105,7 +106,7 @@ Serve the backend-generated JPEG for a committed revision. Accept only a valid f
 
 Return `404 IMAGE_NOT_FOUND` if that revision is unavailable. Retain the current image and at least the immediately previous committed revision per frame to accommodate in-flight metadata reads. Older revisions may be deleted after a grace period of at least 60 seconds. Clients encountering a missing old revision refetch metadata and load the current URL. This is a current-picture feature, not permanent upload history.
 
-## Server validation and limits
+## Image validation and limits
 
 - Allow only JPEG, PNG and WebP input. Check decoded content as well as declared MIME type; do not trust extensions, filenames or headers alone. Reject SVG, HTML, animated images, malformed files and unsupported formats.
 - Limit the uploaded file to 10 MiB (10,485,760 bytes). Enforce a streaming request limit of 11 MiB including multipart overhead, and abort oversized requests early. Reject zero-byte files, duplicate `image` fields, extra fields, extra files and malformed multipart bodies.
@@ -186,4 +187,34 @@ Backend implementation and frontend integration must each be tested before descr
 
 ## Frontend verification
 
-Run `node --test tests/framePictures.test.mjs` for response validation and HTTP upload contract checks. Set `VITE_API_URL` in `.env.local` to the backend HTTP(S) origin and restart Vite; set the same variable in the deployment build environment. The default is `http://localhost:3000`, including when no production value is configured. For production, configure an HTTPS backend origin explicitly. Requests time out after 30 seconds and polling pauses while the page is hidden. Existing browser-local pictures are ignored and never uploaded automatically.
+Run `node --test tests/framePictures.test.mjs` for response validation and HTTP upload contract checks. Set `VITE_API_URL` in `.env.local` to the backend HTTP(S) origin and restart Vite; set the same variable in the deployment build environment. The default is `http://localhost:3000`, including when no production value is configured. For production, configure an HTTPS backend origin explicitly. Metadata and media loads time out after 30 seconds; uploads time out after 120 seconds and polling pauses while the page is hidden. Existing browser-local pictures are ignored and never uploaded automatically.
+
+## Video extension
+
+The frontend accepts JPEG/PNG/WebP images up to 10 MiB and MP4/WebM videos up to 50 MiB. It uses the same PUT endpoint and multipart field `image` for both media types. This is an additive contract: legacy image records without `mediaType` still work. A backend that only implements images must be extended before video uploads work.
+
+For a video, return `mediaType: "video"` and put its root-relative URL in the existing `imageUrl` field. The legacy field name is retained to avoid renaming existing image payloads. Example:
+
+```json
+{
+  "frame": {
+    "frameId": "left",
+    "revision": 3,
+    "mediaType": "video",
+    "imageUrl": "/api/frame-pictures/left/videos/3.mp4",
+    "updatedAt": 1793059320000
+  }
+}
+```
+
+Images may return `mediaType: "image"` or omit it. Their existing JPEG URLs stay unchanged. An empty record has revision zero, null URL/timestamp, and omitted or image mediaType. Revisions increase across image-to-video and video-to-image replacements; a frame has exactly one current medium. Metadata commits, durable storage and cleanup rules apply to both types.
+
+For video uploads, enforce a 50 MiB file limit and a 51 MiB total streaming request limit instead of the image byte limits. Probe actual container, codecs, dimensions and duration rather than trusting MIME type or filename. Accept only MP4/WebM containers with a decodable video stream; reject malformed media with `400 INVALID_VIDEO`, unsupported containers/codecs with `415 UNSUPPORTED_MEDIA_TYPE`, and clips over 60 seconds or 3840 by 2160 pixels with `413 VIDEO_TOO_LARGE`. Retain the previous committed media on every failure. Existing limits and errors remain valid for image requests.
+
+Process videos asynchronously in a worker or external transcoder with bounded CPU/memory and a 110-second server request deadline. Return `503 PROCESSING_TIMEOUT` if normalization cannot complete in time. Produce a 1280 by 720 H.264 MP4, yuv420p, at most 30 fps, fitting the entire oriented image with dark letterboxing. Remove audio and metadata, move MP4 metadata to the beginning for streaming, and limit normalized output to 50 MiB. Never expose arbitrary uploaded source files. Keep the two-processing-request concurrency limit and upload rate limits across images and videos. The deployment must provision an appropriate transcoder; frontend changes do not install one on the separate backend.
+
+Serve `GET /api/frame-pictures/:frameId/videos/:revision.mp4` as `video/mp4` with immutable caching and nosniff. Support GET/HEAD, byte ranges (`Accept-Ranges: bytes`, 206 with Content-Range for valid ranges, 416 for unsatisfiable ranges), and CORS on all responses. Allow the Range request header in cross-origin preflight; expose Accept-Ranges, Content-Range, Content-Length and Retry-After. Return `404 IMAGE_NOT_FOUND` for missing revisions, retaining the existing API error shape.
+
+The frontend streams versioned videos directly into a Three.js VideoTexture. Playback is muted, looping and inline, with no audio controls or shared playback clock. Visitors see the same clip but are not synchronized to the same timestamp. Playback pauses while the page is hidden and resumes on return. Video fetch/decode/autoplay errors remain console-only and preserve the previous medium; polling retries unsuccessful revisions. Replacing a clip or leaving the world pauses and detaches video sources, disposes textures and aborts pending loads. Upload and change controls remain above the frame and use Toastify for upload results.
+
+Verify with the extended backend: image-to-video-to-image replacement, two simultaneous visitors, MP4 and WebM input, portrait letterboxing, muted looping on mobile, range delivery, hidden-page pause/resume, invalid/oversized/overlong clips, failed transcoding, stale responses, and leaving during upload/playback. Browser and backend media integration remain manual checks until a compatible server and video fixture are available.

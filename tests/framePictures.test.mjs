@@ -80,3 +80,127 @@ test("returns server errors and Retry-After; rejects invalid API origins", async
   ])
     assert.throws(() => new FramePicturesApi(origin));
 });
+
+test("video metadata accepts only matching MP4 revisions and retains legacy images", () => {
+  const video = {
+    ...picture(3),
+    mediaType: "video",
+    imageUrl: "/api/frame-pictures/left/videos/3.mp4",
+  };
+  assert.equal(parseFramePicture(video).mediaType, "video");
+  assert.equal(parseFramePicture(picture()).mediaType, "image");
+  for (const invalid of [
+    { ...video, imageUrl: picture(3).imageUrl },
+    { ...video, imageUrl: "/api/frame-pictures/left/videos/2.mp4" },
+    { ...video, imageUrl: "https://other.example/video.mp4" },
+    { ...video, mediaType: "audio" },
+    { ...video, revision: 0, imageUrl: null, updatedAt: null },
+  ])
+    assert.throws(() => parseFramePicture(invalid));
+});
+
+test("video uses the existing multipart field and receives committed video metadata", async () => {
+  const api = new FramePicturesApi("https://api.example");
+  const file = new File(["video bytes"], "clip.webm", { type: "video/webm" });
+  result = new Response(
+    JSON.stringify({
+      frame: {
+        ...picture(4),
+        mediaType: "video",
+        imageUrl: "/api/frame-pictures/left/videos/4.mp4",
+      },
+    }),
+  );
+  const frame = await api.upload("left", file, new AbortController().signal);
+  assert.equal(frame.mediaType, "video");
+  const [, options] = calls.at(-1);
+  assert.equal(options.body.get("image").type, "video/webm");
+  assert.equal(await options.body.get("image").text(), "video bytes");
+  assert.deepEqual([...options.body.keys()], ["image"]);
+});
+
+test("frame videos loop muted, preserve newer revisions and release replaced playback", async () => {
+  const THREE = await import("three");
+  class Video extends EventTarget {
+    src = "";
+    pauses = 0;
+    plays = 0;
+    readyState = 4;
+    HAVE_CURRENT_DATA = 2;
+    load() {
+      if (this.src) queueMicrotask(() => this.dispatchEvent(new Event("loadeddata")));
+    }
+    async play() {
+      this.plays++;
+    }
+    pause() {
+      this.pauses++;
+    }
+    removeAttribute(name) {
+      if (name === "src") this.src = "";
+    }
+  }
+  const module = { exports: {} };
+  const code = ts.transpileModule(
+    readFileSync(new URL("../src/components/FramePictures.ts", import.meta.url), "utf8").replaceAll(
+      "import.meta.env",
+      "({})",
+    ),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const created = [];
+  vm.runInNewContext(code, {
+    exports: module.exports,
+    require: (name) => (name === "three" ? THREE : {}),
+    HTMLVideoElement: Video,
+    AbortController,
+    DOMException,
+    URL,
+    setTimeout,
+    clearTimeout,
+    console,
+    document: {
+      hidden: false,
+      createElement: () => {
+        const video = new Video();
+        created.push(video);
+        return video;
+      },
+    },
+  });
+  const controller = Object.create(module.exports.FramePictures.prototype);
+  controller.api = { origin: "https://api.example" };
+  controller.disposed = false;
+  const frame = {
+    id: "left",
+    revision: 0,
+    pendingRevision: 0,
+    material: new THREE.MeshStandardMaterial(),
+    button: {},
+  };
+  const metadata = (revision) => ({
+    ...picture(revision),
+    mediaType: "video",
+    imageUrl: `/api/frame-pictures/left/videos/${revision}.mp4`,
+  });
+  await controller.load(frame, metadata(1));
+  const first = frame.video;
+  assert.equal(first.muted, true);
+  assert.equal(first.loop, true);
+  assert.equal(first.playsInline, true);
+  assert.equal(first.plays, 1);
+  assert.equal(frame.texture.isVideoTexture, true);
+  assert.equal(frame.texture.flipY, false);
+  let disposed = 0;
+  frame.texture.addEventListener("dispose", () => disposed++);
+  await controller.load(frame, metadata(2));
+  assert.equal(first.src, "");
+  assert.equal(first.pauses, 1);
+  assert.equal(disposed, 1);
+  assert.equal(frame.revision, 2);
+  await controller.load(frame, metadata(1));
+  assert.equal(created.length, 2);
+  controller.releaseVideo(frame.video);
+  frame.texture.dispose();
+  frame.material.dispose();
+});

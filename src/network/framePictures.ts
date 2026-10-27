@@ -4,24 +4,30 @@ export type FramePicture = {
   revision: number;
   imageUrl: string | null;
   updatedAt: number | null;
+  mediaType?: "image" | "video";
 };
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** Accept only versioned image paths from our API, never arbitrary remote image URLs. */
+/** Accept only versioned media paths from our API, never arbitrary remote URLs. */
 export function parseFramePicture(value: unknown): FramePicture {
   if (!record(value)) throw new Error("Invalid frame picture response.");
   const { frameId, revision, imageUrl, updatedAt } = value;
+  const mediaType = value.mediaType ?? "image";
   if (
     (frameId !== "left" && frameId !== "right") ||
     typeof revision !== "number" ||
     !Number.isSafeInteger(revision) ||
     revision < 0 ||
+    (mediaType !== "image" && mediaType !== "video") ||
     (revision === 0
-      ? imageUrl !== null || updatedAt !== null
-      : imageUrl !== `/api/frame-pictures/${frameId}/images/${revision}.jpg` ||
+      ? imageUrl !== null || updatedAt !== null || mediaType !== "image"
+      : imageUrl !==
+          (mediaType === "video"
+            ? `/api/frame-pictures/${frameId}/videos/${revision}.mp4`
+            : `/api/frame-pictures/${frameId}/images/${revision}.jpg`) ||
         typeof updatedAt !== "number" ||
         !Number.isSafeInteger(updatedAt) ||
         updatedAt < 0)
@@ -32,6 +38,7 @@ export function parseFramePicture(value: unknown): FramePicture {
     revision,
     imageUrl: imageUrl as string | null,
     updatedAt: updatedAt as number | null,
+    mediaType,
   };
 }
 

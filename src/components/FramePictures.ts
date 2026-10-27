@@ -14,6 +14,7 @@ type Frame = {
   pendingRevision: number;
   loading?: AbortController;
   texture?: THREE.Texture;
+  video?: HTMLVideoElement;
 };
 
 /** Shared artwork with independent materials and no image data on the multiplayer socket. */
@@ -32,13 +33,23 @@ export class FramePictures {
   private refreshPending = false;
   private onVisibility = () => {
     clearTimeout(this.pollTimer);
+    for (const frame of this.frames) {
+      if (document.hidden) frame.video?.pause();
+      else if (frame.video)
+        void frame.video
+          .play()
+          .catch((error: unknown) => console.warn("Frame video playback paused.", error));
+    }
     if (!document.hidden) void this.refresh();
   };
 
-  private async request<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async request<T>(
+    operation: (signal: AbortSignal) => Promise<T>,
+    timeout = 30000,
+  ): Promise<T> {
     const controller = new AbortController();
     this.requests.add(controller);
-    const timer = setTimeout(() => controller.abort(), 30000);
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       return await operation(controller.signal);
     } finally {
@@ -70,16 +81,16 @@ export class FramePictures {
       mesh.material = material;
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = "Upload image";
-      button.setAttribute("aria-label", `Upload or replace ${side} frame image`);
-      button.title = "Shared with all visitors. Choose another image to replace it.";
+      button.textContent = "Upload image / video";
+      button.setAttribute("aria-label", `Upload or replace ${side} frame image or video`);
+      button.title = "Shared with all visitors. Choose another image or video to replace it.";
       button.className =
         "absolute z-10 rounded bg-slate-900/90 px-3 py-2 text-sm text-white disabled:opacity-60";
       button.style.transform = "translate(-50%, calc(-100% - 8px))";
       button.hidden = true;
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = "image/jpeg,image/png,image/webp";
+      input.accept = "image/jpeg,image/png,image/webp,video/mp4,video/webm";
       input.hidden = true;
       // Anchor above the wooden frame, keeping the artwork itself unobstructed.
       const frameBounds = new THREE.Box3().setFromObject(mesh.parent ?? mesh);
@@ -111,16 +122,28 @@ export class FramePictures {
     if (this.api) void this.refresh();
   }
 
-  private apply(frame: Frame, image: HTMLImageElement) {
-    const texture = new THREE.Texture(image);
+  private releaseVideo(video?: HTMLVideoElement) {
+    if (!video) return;
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  }
+
+  private apply(frame: Frame, source: HTMLImageElement | HTMLVideoElement) {
+    const texture =
+      source instanceof HTMLVideoElement
+        ? new THREE.VideoTexture(source)
+        : new THREE.Texture(source);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.flipY = false;
     texture.needsUpdate = true;
     frame.texture?.dispose();
+    this.releaseVideo(frame.video);
+    frame.video = source instanceof HTMLVideoElement ? source : undefined;
     frame.texture = texture;
     frame.material.map = texture;
     frame.material.needsUpdate = true;
-    frame.button.textContent = "Change image";
+    frame.button.textContent = "Change image / video";
   }
 
   /** Revisions guard HTTP ordering and asynchronous texture decoding independently. */
@@ -138,7 +161,54 @@ export class FramePictures {
     frame.loading = controller;
     const timer = setTimeout(() => controller.abort(), 30000);
     let url: string | undefined;
+    let video: HTMLVideoElement | undefined;
     try {
+      if (picture.mediaType === "video") {
+        // Stream versioned video directly, allowing the browser to use HTTP range requests.
+        video = document.createElement("video");
+        video.crossOrigin = "anonymous";
+        video.muted = true;
+        video.defaultMuted = true;
+        video.loop = true;
+        video.playsInline = true;
+        video.preload = "auto";
+        const currentVideo = video;
+        await new Promise<void>((resolve, reject) => {
+          const cleanup = () => {
+            currentVideo.removeEventListener("loadeddata", ready);
+            currentVideo.removeEventListener("error", failed);
+            controller.signal.removeEventListener("abort", aborted);
+          };
+          const ready = () => {
+            cleanup();
+            resolve();
+          };
+          const failed = () => {
+            cleanup();
+            reject(new Error("Could not load frame video."));
+          };
+          const aborted = () => {
+            cleanup();
+            reject(new DOMException("Aborted", "AbortError"));
+          };
+          currentVideo.addEventListener("loadeddata", ready);
+          currentVideo.addEventListener("error", failed);
+          controller.signal.addEventListener("abort", aborted, { once: true });
+          currentVideo.src = new URL(picture.imageUrl!, this.api!.origin).href;
+          currentVideo.load();
+        });
+        if (!document.hidden) await video.play();
+        if (
+          this.disposed ||
+          controller.signal.aborted ||
+          frame.pendingRevision !== picture.revision
+        )
+          return;
+        this.apply(frame, video);
+        frame.revision = picture.revision;
+        video = undefined;
+        return;
+      }
       const response = await fetch(new URL(picture.imageUrl, this.api.origin), {
         signal: controller.signal,
         credentials: "omit",
@@ -160,6 +230,7 @@ export class FramePictures {
     } finally {
       clearTimeout(timer);
       if (url) URL.revokeObjectURL(url);
+      this.releaseVideo(video);
       if (frame.loading === controller) {
         frame.loading = undefined;
         frame.pendingRevision = 0;
@@ -199,24 +270,35 @@ export class FramePictures {
 
   private async upload(frame: Frame, file: File) {
     if (!this.api || frame.button.disabled) return;
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || !file.size || file.size > 10 * 1024 * 1024) {
-      this.notification.show("Choose a JPG, PNG or WebP image up to 10 MiB.", "error");
+    const isVideo = /^video\/(mp4|webm)$/.test(file.type);
+    if (
+      (!isVideo && !/^image\/(jpeg|png|webp)$/.test(file.type)) ||
+      !file.size ||
+      file.size > (isVideo ? 50 : 10) * 1024 * 1024
+    ) {
+      this.notification.show(
+        "Choose an image up to 10 MiB or an MP4/WebM video up to 50 MiB.",
+        "error",
+      );
       return;
     }
     frame.button.disabled = true;
-    this.notification.show("Uploading shared image...", "info", true);
+    this.notification.show("Uploading shared media...", "info", true);
     try {
-      const picture = await this.request((signal) => this.api!.upload(frame.id, file, signal));
+      const picture = await this.request(
+        (signal) => this.api!.upload(frame.id, file, signal),
+        120000,
+      );
       if (this.disposed) return;
       this.notification.show(
-        "Image saved. Other visitors receive it on their next refresh.",
+        "Media saved. Other visitors receive it on their next refresh.",
         "success",
       );
       await this.load(frame, picture);
     } catch (error) {
       if (!this.disposed)
         this.notification.show(
-          error instanceof Error ? error.message : "Image upload failed.",
+          error instanceof Error ? error.message : "Media upload failed.",
           "error",
         );
     } finally {
@@ -268,6 +350,7 @@ export class FramePictures {
       frame.input.remove();
       frame.mesh.material = frame.original;
       frame.texture?.dispose();
+      this.releaseVideo(frame.video);
       frame.material.dispose();
     }
     // Restore shared GLB materials so scene disposal can release their original textures once.
