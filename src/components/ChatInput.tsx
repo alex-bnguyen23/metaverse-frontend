@@ -1,4 +1,5 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { Notification } from "../utils/notifications";
 import type { MultiplayerSession } from "../network/MultiplayerSession";
 
 export default function ChatInput({
@@ -11,6 +12,11 @@ export default function ChatInput({
   const { error } = useSyncExternalStore(session.subscribeChat, session.getChatSnapshot);
   const [draft, setDraft] = useState("");
   const count = Array.from(draft.trim()).length;
+  useEffect(() => {
+    const notification = new Notification();
+    if (error) notification.show(error, "error");
+    return () => notification.dismiss();
+  }, [error, session]);
 
   return (
     <section
@@ -33,7 +39,7 @@ export default function ChatInput({
             onChange={(event) => setDraft(event.target.value)}
             disabled={!connected}
             placeholder={connected ? "Type a message…" : "Waiting for connection…"}
-            aria-describedby="chat-hint chat-error"
+            aria-describedby="chat-hint"
             className="w-full rounded border border-green-900/20 bg-white px-2 py-2 disabled:opacity-50"
           />
         </label>
@@ -48,9 +54,6 @@ export default function ChatInput({
       <p id="chat-hint" className="mt-1 text-xs text-gray-500">
         {count}/200 · One message per second
       </p>
-      {/* <p id="chat-error" role="status" className="mt-1 text-xs text-red-700">
-        {error}
-      </p> */}
     </section>
   );
 }

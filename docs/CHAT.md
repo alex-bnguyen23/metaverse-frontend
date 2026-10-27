@@ -115,3 +115,7 @@ Broadcast to all joined players, including the sender.
 - Do not include chat messages in the 20 TPS game loop.
 - Do not log full chat message contents by default.
 - Add meaningful English comments explaining validation, rate limiting, and broadcasting.
+
+### Error notifications
+
+The frontend displays chat errors with React Toastify and dismisses the owning toast when the chat session changes or the component unmounts. Error toasts close automatically after five seconds. Chat bubbles and the wire protocol are unchanged.

@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import TouchJoystick, { type JoystickInput } from "./TouchJoystick";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+import dracoWrapperUrl from "three/examples/jsm/libs/draco/gltf/draco_wasm_wrapper.js?url";
+import dracoWasmUrl from "three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?url";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { applyAppearance, type Appearance } from "../utils/appearance";
 import { MultiplayerSession, type ConnectionStatus } from "../network/MultiplayerSession";
@@ -11,6 +14,8 @@ import { adaptMovementInput } from "../utils/movementAdapter";
 import { initializePhysics, WorldPhysics } from "../physics/WorldPhysics";
 
 import { VehicleController } from "../vehicles/VehicleController";
+import { FramePictures } from "./FramePictures";
+import { Notification } from "../utils/notifications";
 
 type MovementState = "Idle" | "Walk" | "Run";
 /** Release GPU resources, collecting shared assets in sets to avoid disposing them repeatedly. */
@@ -49,11 +54,7 @@ export default function World({
   onSession?: (session: MultiplayerSession | null) => void;
 }) {
   // Refs keep mutable scene objects available without triggering React renders each frame.
-  const [worldMessage, setWorldMessage] = useState<string | null>(
-    preview ? null : "Loading world physics...",
-  );
   const vehicleButtonRef = useRef<HTMLButtonElement>(null);
-  const vehicleStatusRef = useRef<HTMLDivElement>(null);
   const interactRef = useRef<() => void>(() => {});
   const containerRef = useRef<HTMLDivElement>(null);
   const characterRef = useRef<THREE.Object3D | null>(null);
@@ -99,6 +100,11 @@ export default function World({
     let networkCharacters: NetworkCharacters | undefined;
     let physics: WorldPhysics | undefined;
     let vehicleController: VehicleController | undefined;
+    let framePictures: FramePictures | undefined;
+    const worldNotification = new Notification();
+    const vehicleNotification = new Notification();
+    let previousVehicleError: string | null = null;
+    if (!preview) worldNotification.show("Loading world physics...", "info", true);
     let releaseVersion = 0;
     interactRef.current = () => {
       if (session && physics && vehicleController) vehicleController.interact(session, physics);
@@ -230,16 +236,22 @@ export default function World({
       activeState = state;
     };
 
-    const loader = new GLTFLoader();
+    // Bundle matching decoder assets locally so compressed Blender exports load in production too.
+    const dracoLoader = new DRACOLoader().setDecoderPath({
+      js: dracoWrapperUrl,
+      wasm: dracoWasmUrl,
+    });
+    const loader = new GLTFLoader().setDRACOLoader(dracoLoader);
     if (!preview)
       loader.load(
-        "/models/osaka-castle2.glb",
+        "/models/osaka-castle.glb",
         (gltf) => {
           if (disposed) {
             disposeModel(gltf.scene);
             return;
           }
           scene.add(gltf.scene);
+          framePictures = new FramePictures(gltf.scene, container);
           void initializePhysics()
             .then(() => {
               if (disposed) return;
@@ -253,23 +265,27 @@ export default function World({
                   "YXZ",
                 ).y,
               );
-              setWorldMessage(null);
+              worldNotification.dismiss();
             })
             .catch((error: unknown) => {
               console.error("Physics initialization failed:", error);
               if (!disposed)
-                setWorldMessage("World physics could not load. Please reload to try again.");
+                worldNotification.show(
+                  "World physics could not load. Please reload to try again.",
+                  "error",
+                );
             });
         },
         undefined,
         (error) => {
           console.error("World load error:", error);
-          if (!disposed) setWorldMessage("World could not load. Please reload to try again.");
+          if (!disposed)
+            worldNotification.show("World could not load. Please reload to try again.", "error");
         },
       );
 
     loader.load(
-      "/models/character2.glb",
+      "/models/character.glb",
       (gltf) => {
         if (disposed) {
           disposeModel(gltf.scene);
@@ -386,8 +402,12 @@ export default function World({
                 ? "Truck occupied"
                 : "Drive truck (E)";
         }
-        if (vehicleStatusRef.current)
-          vehicleStatusRef.current.textContent = session.vehicleError ?? "";
+        // Report transitions only; the render loop must not create repeated toasts.
+        if (session.vehicleError !== previousVehicleError) {
+          previousVehicleError = session.vehicleError;
+          if (session.vehicleError) vehicleNotification.show(session.vehicleError, "error");
+          else vehicleNotification.dismiss();
+        }
       }
       // Keep idle and preview animations advancing even when the player is not moving.
       mixer?.update(delta);
@@ -397,6 +417,7 @@ export default function World({
       controls.target.copy(player.position).addScaledVector(up, preview ? 0.95 : 1.2);
       controls.update();
       if (networkCharacters) chatBubbles?.update(camera, networkCharacters.objects);
+      framePictures?.update(camera, container.clientWidth, container.clientHeight);
       renderer.render(scene, camera);
     });
 
@@ -404,9 +425,12 @@ export default function World({
     // Stop rendering before disposing GPU resources to avoid using released assets.
     return () => {
       disposed = true;
+      worldNotification.dismiss();
+      vehicleNotification.dismiss();
       interactRef.current = () => {};
       session?.stop();
       chatBubbles?.dispose();
+      framePictures?.dispose();
       sessionCallbackRef.current?.(null);
       networkCharacters?.dispose();
       physics?.dispose();
@@ -422,6 +446,7 @@ export default function World({
       mixer?.stopAllAction();
       if (character) mixer?.uncacheRoot(character);
       controls.dispose();
+      dracoLoader.dispose();
       disposeModel(scene);
       if (!preview && character) disposeModel(character);
       renderer.dispose();
@@ -446,19 +471,6 @@ export default function World({
           >
             Drive truck (E)
           </button>
-          <div
-            ref={vehicleStatusRef}
-            role="status"
-            className="mt-2 max-w-sm rounded bg-white/90 px-2 text-sm text-slate-900"
-          />
-        </div>
-      )}
-      {worldMessage && (
-        <div
-          role="status"
-          className="absolute inset-x-3 top-24 rounded bg-white/95 p-3 text-center"
-        >
-          {worldMessage}
         </div>
       )}
       {/* Ignore pointer events on the instructions so dragging still reaches the canvas. */}
@@ -473,12 +485,12 @@ export default function World({
           background: "#0009",
           color: "white",
           pointerEvents: "none",
-          fontSize: 14,
+          fontSize: 11,
         }}
       >
         {preview
           ? "Drag: Rotate  Scroll: Zoom"
-          : "WASD / Arrows: Move / Drive  Shift: Run  E: Enter / Exit truck  Drag: Look"}
+          : "WASD / Arrows: Move / Drive  Shift: Run E: Enter / Exit truck  Drag: Look"}
       </div>
     </div>
   );

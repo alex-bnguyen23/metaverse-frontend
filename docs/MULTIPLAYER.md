@@ -14,6 +14,8 @@ WASD and the arrow keys follow the camera viewpoint continuously. Up/Down/Left/R
 
 ## Local physics
 
+The world and character share a `GLTFLoader` configured with `DRACOLoader` for Draco-compressed Blender exports. Vite bundles the matching Three.js decoder wrapper and WASM via URL imports, so decoding needs no external CDN or manually copied public assets. The scene releases decoder workers on unmount. After changing compressed assets, verify both the world and dressing-room preview load in development and the production build.
+
 `TouchJoystick.tsx` displays a 156px circular joystick centered horizontally above chat when the viewport is at most 1024px wide or a coarse pointer is available. Drag outside the center dead zone to walk in any camera-relative direction. Holding outside the dead zone for one second automatically runs; centering or releasing stops movement and resets the timer. Pointer capture supports releasing outside the control. Cancellation, focus changes, page hiding, input-mode changes, and unmount clear movement and timers. Keyboard controls and the WebSocket protocol remain unchanged. `TouchMovementControls.tsx` remains in the project but is not rendered. The joystick is hidden in the dressing preview. Verify arbitrary drag directions, the dead zone, auto-run after one second, release, camera dragging with another finger, chat focus, and returning after hiding the page.
 
 Rapier initializes once per application lifetime. World geometry is loaded once per scene and baked into static triangle colliders, preserving geometric bridge decks, stairs, walls, and genuine doorway openings. The local capsule simulates at 60 Hz independently from the maximum 20 Hz network rate. Walking speed is 2.5 units/second; running speed is 5.5. Capsule radius is 0.25 and height is 1.6, step height is 0.4, ground snap is 0.5, and maximum climb slope is 50 degrees. The character's reported position is its feet position.
@@ -49,3 +51,11 @@ The bottom chat input shares the world WebSocket connection and follows `CHAT.md
 Messages are trimmed, limited to 200 Unicode code points, and locally limited to one send per second. The backend must enforce the same limits. Chat errors display without disconnecting an already joined player. Drafts are preserved through disconnections; chat controls are disabled until reconnection finishes. Focus on the chat controls clears movement input.
 
 To verify manually, join with two tabs, send text and emoji from both, confirm each broadcast appears once in each tab, and confirm typing WASD in chat does not move a character. Test sending again within one second and restarting the backend. The backend must implement `chat:send` / `chat:message` on the configured endpoint for messages to be delivered.
+
+## Notifications
+
+A single React Toastify container in `App.tsx` displays up to four notifications at the bottom right. Frame uploads, world loading/failures, vehicle errors, chat errors, and connection errors/reconnection warnings use toasts. Completed notifications close after five seconds; loading toasts persist until completion. The connection/player-count badge and interaction buttons remain persistent UI. Chat speech bubbles remain above characters.
+
+`utils/notifications.ts` owns each notification so async progress updates the same toast and leaving a screen dismisses its notifications. Vehicle errors are emitted on state transitions, never repeatedly from the render loop. Background frame metadata/image refresh failures remain console-only. No WebSocket or HTTP payloads change.
+
+Verify upload success/failure, world loading/failure, chat rate-limit errors, vehicle rejections, connection loss/recovery, automatic dismissal, and leaving the world during an upload. Ensure notifications do not cover the joystick or chat controls on mobile.

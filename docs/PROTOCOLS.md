@@ -458,6 +458,10 @@ Keep the existing multiplayer chat protocol unchanged.
 - Chat is independent of movement updates.
 - Chat messages must be validated and rate-limited.
 
+## Shared Frame Picture HTTP API
+
+The proposed upload-and-replace API is specified in [FRAME_PICTURES.md](FRAME_PICTURES.md). Implement `GET /api/frame-pictures`, `PUT /api/frame-pictures/:frameId` using multipart field `image`, and versioned JPEG downloads. Both `left` and `right` are shared across all visitors; any visitor may upload. Persist files and revisions on durable storage. The initial contract uses HTTP polling and adds no WebSocket events or `world:init` fields. The frontend uses this HTTP contract; the separate backend must implement it before shared uploads work.
+
 ## Protocol Compliance
 
 - Both frontend and backend MUST follow this document.

@@ -5,6 +5,8 @@ import DressPage from "./pages/DressPage";
 import WorldPage from "./pages/WorldPage";
 import { LandingPage } from "./pages/LandingPage";
 import "./App.css";
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 // Own appearance above both routes so navigation preserves the selected look.
 export default function App() {
   // A function initializer reads storage when state is created, rather than on every render.
@@ -19,16 +21,19 @@ export default function App() {
     }
   }, [appearance]);
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route
-          path="/dress"
-          element={<DressPage appearance={appearance} onChange={setAppearance} />}
-        />
-        <Route path="/world" element={<WorldPage appearance={appearance} />} />
-        <Route path="*" element={<Navigate to="/dress" replace />} />
-      </Routes>
-    </BrowserRouter>
+    <>
+      <ToastContainer position="bottom-right" autoClose={5000} limit={4} />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<LandingPage />} />
+          <Route
+            path="/dress"
+            element={<DressPage appearance={appearance} onChange={setAppearance} />}
+          />
+          <Route path="/world" element={<WorldPage appearance={appearance} />} />
+          <Route path="*" element={<Navigate to="/dress" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </>
   );
 }

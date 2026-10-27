@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { Notification } from "../utils/notifications";
 import type { ConnectionStatus, MultiplayerSession } from "../network/MultiplayerSession";
 import type { Appearance } from "../utils/appearance";
 import World from "../components/World";
@@ -28,6 +29,12 @@ export default function WorldPage({ appearance }: { appearance: Appearance }) {
       return "Player";
     }
   });
+  useEffect(() => {
+    const notification = new Notification();
+    if (status.state === "error") notification.show(status.message, "error");
+    else if (status.state === "reconnecting") notification.show(status.message, "warning");
+    return () => notification.dismiss();
+  }, [status.state, status.message]);
   return (
     <>
       <main className="world-page">
