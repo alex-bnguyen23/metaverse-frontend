@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import { useState } from "react";
 import { defaultAppearance, type Appearance } from "../utils/appearance";
+import type { CharacterModel } from "../network/protocol";
 import World from "../components/World";
 // Choice indexes match Appearance values and the color palettes used by the model.
 // `as const` preserves exact keys so appearance[key] can be checked by TypeScript.
@@ -14,7 +15,11 @@ const options = [
 export default function DressPage({
   appearance,
   onChange,
+  model,
+  onModelChange,
 }: {
+  model: CharacterModel;
+  onModelChange: (model: CharacterModel) => void;
   appearance: Appearance;
   onChange: (appearance: Appearance) => void;
 }) {
@@ -41,28 +46,53 @@ export default function DressPage({
               onChange={(event) => setName(event.target.value)}
             />
           </label>
-          <div className="dress-option-groups">
-            {/* Generate groups from the option definitions to keep their behavior consistent. */}
-            {options.map(({ key, label, choices }) => (
-              <fieldset key={key}>
-                <legend>{label}</legend>
-                <div className="choices">
-                  {/* aria-pressed communicates selection and drives the CSS highlight.
+          <fieldset className="my-3">
+            <legend>Character</legend>
+            <div className="choices">
+              {(
+                [
+                  ["custom", "Custom"],
+                  ["person2", "Employee"],
+                  ["person3", "Employee kawaii"],
+                  ["ceo", "CEO"],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={model === id}
+                  onClick={() => onModelChange(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          {model !== "custom" && <p>This character uses its original appearance.</p>}
+          {model === "custom" && (
+            <div className="dress-option-groups">
+              {/* Generate groups from the option definitions to keep their behavior consistent. */}
+              {options.map(({ key, label, choices }) => (
+                <fieldset key={key}>
+                  <legend>{label}</legend>
+                  <div className="choices">
+                    {/* aria-pressed communicates selection and drives the CSS highlight.
                       Copying appearance preserves the other choices while replacing this key. */}
-                  {choices.map((choice, value) => (
-                    <button
-                      key={choice}
-                      type="button"
-                      aria-pressed={appearance[key] === value}
-                      onClick={() => onChange({ ...appearance, [key]: value })}
-                    >
-                      <small>{value}</small> {choice}
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-            ))}
-          </div>
+                    {choices.map((choice, value) => (
+                      <button
+                        key={choice}
+                        type="button"
+                        aria-pressed={appearance[key] === value}
+                        onClick={() => onChange({ ...appearance, [key]: value })}
+                      >
+                        <small>{value}</small> {choice}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+            </div>
+          )}
           <p className="save-status">
             Your selections are saved on this device when storage is available.
           </p>
@@ -81,18 +111,20 @@ export default function DressPage({
             >
               Enter the world &rarr;
             </Link>
-            <button
-              className="reset-button"
-              type="button"
-              onClick={() => onChange({ ...defaultAppearance })}
-            >
-              Reset look
-            </button>
+            {model === "custom" && (
+              <button
+                className="reset-button"
+                type="button"
+                onClick={() => onChange({ ...defaultAppearance })}
+              >
+                Reset look
+              </button>
+            )}
           </div>
         </section>
         <section className="character-preview" aria-label="Live character preview">
           {/* Preview uses the same character with a closer camera and no castle movement. */}
-          <World appearance={appearance} preview />
+          <World key={model} appearance={appearance} model={model} preview />
         </section>
       </main>
     </>

@@ -1,7 +1,58 @@
 import * as THREE from "three";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { applyAppearance } from "../utils/appearance";
-import type { AnimationState, PlayerState } from "../network/protocol";
+import type { AnimationState, PlayerState, CharacterModel } from "../network/protocol";
+
+export const characterAssets: Record<CharacterModel, string> = {
+  custom: "/models/character.glb",
+  person2: "/models/person2.glb",
+  person3: "/models/person3.glb",
+  ceo: "/models/ceo-character.glb",
+};
+export const characterClips: Record<CharacterModel, Partial<Record<AnimationState, string>>> = {
+  custom: { Idle: "Idle", Walk: "Walk", Run: "Run" },
+  person2: { Walk: "walk", Run: "run" },
+  person3: { Walk: "Walking", Run: "Running" },
+  ceo: { Walk: "Walking", Run: "Running" },
+};
+
+/** Keep model normalization separate from animated transforms and network placement. */
+export function normalizeCharacter(model: THREE.Object3D): THREE.Group {
+  const root = new THREE.Group();
+  const placement = new THREE.Group();
+  root.add(placement);
+  placement.add(model);
+  const bounds = new THREE.Box3().setFromObject(model);
+  const height = bounds.max.y - bounds.min.y;
+  if (height > 0) {
+    const scale = 1.6 / height;
+    placement.scale.setScalar(scale);
+    placement.position.set(
+      (-(bounds.min.x + bounds.max.x) * scale) / 2,
+      -bounds.min.y * scale,
+      (-(bounds.min.z + bounds.max.z) * scale) / 2,
+    );
+  }
+  return root;
+}
+
+/** Lock horizontal hip/root translation so locomotion cannot add network displacement. */
+export function movementClip(
+  clip: THREE.AnimationClip,
+  model: THREE.Object3D,
+): THREE.AnimationClip {
+  const result = clip.clone();
+  for (const track of result.tracks) {
+    if (!track.name.endsWith(".position")) continue;
+    const node = model.getObjectByName(track.name.slice(0, -9));
+    if (!node || (!/hips|root/i.test(node.name) && node !== model)) continue;
+    for (let i = 0; i < track.values.length; i += 3) {
+      track.values[i] = node.position.x;
+      track.values[i + 2] = node.position.z;
+    }
+  }
+  return result;
+}
 
 type Instance = {
   root: THREE.Object3D;
@@ -18,12 +69,16 @@ export class NetworkCharacters {
   private readonly rotation = new THREE.Quaternion();
   private readonly up = new THREE.Vector3(0, 1, 0);
   private readonly scene: THREE.Scene;
-  private readonly template: THREE.Object3D;
-  private readonly clips: THREE.AnimationClip[];
+  private readonly templates = new Map<
+    CharacterModel,
+    { root: THREE.Object3D; clips: THREE.AnimationClip[] }
+  >();
+  addTemplate(model: CharacterModel, root: THREE.Object3D, clips: THREE.AnimationClip[]) {
+    this.templates.set(model, { root, clips });
+  }
   constructor(scene: THREE.Scene, template: THREE.Object3D, clips: THREE.AnimationClip[]) {
     this.scene = scene;
-    this.template = template;
-    this.clips = clips;
+    this.addTemplate("custom", template, clips);
   }
 
   update(players: ReadonlyMap<string, PlayerState>, delta: number, localPlayerId?: string | null) {
@@ -31,7 +86,11 @@ export class NetworkCharacters {
     for (const [id, player] of players) {
       let instance = this.instances.get(id);
       if (!instance) {
-        const root = clone(this.template);
+        const modelId = player.model ?? "custom";
+        const template = this.templates.get(modelId);
+        if (!template) continue;
+        const model = clone(template.root);
+        const root = normalizeCharacter(model);
         // Clone each source material once per character, preserving intra-model sharing.
         const materials = new Map<THREE.Material, THREE.Material>();
         const ownMaterial = (material: THREE.Material) => {
@@ -44,14 +103,14 @@ export class NetworkCharacters {
               ? object.material.map(ownMaterial)
               : ownMaterial(object.material);
         });
-        applyAppearance(root, player.appearance);
+        if (player.appearance) applyAppearance(root, player.appearance);
         root.position.set(player.position.x, player.position.y, player.position.z);
         root.rotation.y = player.rotation;
-        const mixer = new THREE.AnimationMixer(root);
+        const mixer = new THREE.AnimationMixer(model);
         const actions: Instance["actions"] = {};
         for (const state of ["Idle", "Walk", "Run"] as const) {
-          const clip = this.clips.find((clip) => clip.name.toLowerCase() === state.toLowerCase());
-          if (clip) actions[state] = mixer.clipAction(clip);
+          const clip = template.clips.find((clip) => clip.name === characterClips[modelId][state]);
+          if (clip) actions[state] = mixer.clipAction(movementClip(clip, model));
         }
         instance = { root, mixer, actions };
         this.instances.set(id, instance);
@@ -67,9 +126,12 @@ export class NetworkCharacters {
       this.rotation.setFromAxisAngle(this.up, player.rotation);
       if (id === localPlayerId) root.quaternion.copy(this.rotation);
       else root.quaternion.slerp(this.rotation, 1 - Math.exp(-20 * delta));
-      if (instance.state !== player.animation && actions[player.animation]) {
-        if (instance.state) actions[instance.state]?.fadeOut(0.2);
-        actions[player.animation]!.reset().fadeIn(0.2).play();
+      if (instance.state !== player.animation) {
+        if (!actions[player.animation]) mixer.stopAllAction();
+        else {
+          if (instance.state) actions[instance.state]?.fadeOut(0.2);
+          actions[player.animation]!.reset().fadeIn(0.2).play();
+        }
         instance.state = player.animation;
       }
       mixer.update(delta);
@@ -80,7 +142,7 @@ export class NetworkCharacters {
     const instance = this.instances.get(id);
     if (!instance) return;
     instance.mixer.stopAllAction();
-    instance.mixer.uncacheRoot(instance.root);
+    instance.mixer.uncacheRoot(instance.mixer.getRoot());
     const materials = new Set<THREE.Material>();
     instance.root.traverse((object) => {
       if (object instanceof THREE.Mesh) {

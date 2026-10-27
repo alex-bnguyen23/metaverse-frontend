@@ -8,14 +8,23 @@ import dracoWasmUrl from "three/examples/jsm/libs/draco/gltf/draco_decoder.wasm?
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { applyAppearance, type Appearance } from "../utils/appearance";
 import { MultiplayerSession, type ConnectionStatus } from "../network/MultiplayerSession";
-import { NetworkCharacters } from "./NetworkCharacters";
+import {
+  NetworkCharacters,
+  characterAssets,
+  characterClips,
+  normalizeCharacter,
+  movementClip,
+} from "./NetworkCharacters";
 import { CharacterChatBubbles } from "./CharacterChatBubbles";
 import { adaptMovementInput } from "../utils/movementAdapter";
 import { initializePhysics, WorldPhysics } from "../physics/WorldPhysics";
 
 import { VehicleController } from "../vehicles/VehicleController";
 import { FramePictures } from "./FramePictures";
+import { GardenDancer } from "./GardenDancer";
 import { Notification } from "../utils/notifications";
+
+import type { CharacterModel } from "../network/protocol";
 
 type MovementState = "Idle" | "Walk" | "Run";
 /** Release GPU resources, collecting shared assets in sets to avoid disposing them repeatedly. */
@@ -42,12 +51,14 @@ function disposeModel(root: THREE.Object3D) {
 
 export default function World({
   appearance,
+  model = "custom",
   preview = false,
   name = "Player",
   onStatus,
   onSession,
 }: {
   appearance: Appearance;
+  model?: CharacterModel;
   preview?: boolean;
   name?: string;
   onStatus?: (status: ConnectionStatus) => void;
@@ -67,8 +78,9 @@ export default function World({
   // Update the existing model directly instead of rebuilding the scene for each selection.
   useEffect(() => {
     appearanceRef.current = appearance;
-    if (characterRef.current) applyAppearance(characterRef.current, appearance);
-  }, [appearance]);
+    if (characterRef.current && model === "custom")
+      applyAppearance(characterRef.current, appearance);
+  }, [appearance, model]);
 
   const statusRef = useRef(onStatus);
   const sessionCallbackRef = useRef(onSession);
@@ -92,7 +104,9 @@ export default function World({
               ? "wss://" + location.host + "/"
               : "ws://localhost:3000/"),
           name,
-          { ...appearanceRef.current },
+          model === "custom"
+            ? { model, appearance: { ...appearanceRef.current } }
+            : { model, appearance: null },
           (status) => statusRef.current?.(status),
         );
     session?.start();
@@ -225,7 +239,11 @@ export default function World({
     // Loads can finish after unmount; callbacks must then release their downloaded models.
     let disposed = false;
     let character: THREE.Object3D | undefined;
+    const playerTemplates: THREE.Object3D[] = [];
     let mixer: THREE.AnimationMixer | undefined;
+    let gateCharacter: THREE.Object3D | undefined;
+    let gateMixer: THREE.AnimationMixer | undefined;
+    const gardenDancers: GardenDancer[] = [];
     let activeState: MovementState | undefined;
     const actions: Partial<Record<MovementState, THREE.AnimationAction>> = {};
     // Blend clips over 0.2 seconds, restarting only when the movement state changes.
@@ -251,6 +269,82 @@ export default function World({
             return;
           }
           scene.add(gltf.scene);
+          const gardenBench = gltf.scene.getObjectByName("Garden_Bench_1_Seat_Slat_2");
+          if (gardenBench) {
+            const gardenPosition = gardenBench.getWorldPosition(new THREE.Vector3());
+            const dances = [
+              { model: "person1", clips: ["All_Night_Dance", "Breakdance_1990"], offset: -2 },
+              { model: "person2", clips: ["dance_05", "dance_02"], offset: 3 },
+            ];
+            for (const dance of dances) {
+              loader.load(
+                `/models/${dance.model}.glb`,
+                (model) => {
+                  if (disposed) {
+                    disposeModel(model.scene);
+                    return;
+                  }
+                  const clips = dance.clips.map((name) =>
+                    model.animations.find((clip) => clip.name === name),
+                  );
+                  if (clips.some((clip) => !clip)) {
+                    console.warn(`Garden dance clips missing for ${dance.model}.`);
+                    disposeModel(model.scene);
+                    return;
+                  }
+                  // Keep both performers clear of the bench and the central castle stairs.
+                  model.scene.position.set(
+                    gardenPosition.x + 3,
+                    0.05,
+                    gardenPosition.z + dance.offset,
+                  );
+                  if (dance.model === "person2") model.scene.scale.multiplyScalar(2);
+                  scene.add(model.scene);
+                  gardenDancers.push(
+                    new GardenDancer(
+                      model.scene,
+                      clips.filter((clip) => clip !== undefined),
+                    ),
+                  );
+                },
+                undefined,
+                (error) => console.error(`Garden ${dance.model} load error:`, error),
+              );
+            }
+          } else console.warn("Castle garden bench anchor missing; dancers were not placed.");
+          const gate = gltf.scene.getObjectByName("Gateway_Gold_Lintel");
+          const approach = gltf.scene.getObjectByName("Gateway_Approach_Path");
+          if (gate && approach) {
+            const gatePosition = gate.getWorldPosition(new THREE.Vector3());
+            const groundHeight = new THREE.Box3().setFromObject(approach).max.y;
+            loader.load(
+              "/models/ceo-character.glb",
+              (ceo) => {
+                if (disposed) {
+                  disposeModel(ceo.scene);
+                  return;
+                }
+                const clip = ceo.animations.find((animation) => animation.name === "Agree_Gesture");
+                if (!clip) {
+                  console.warn("CEO animation missing: Agree_Gesture");
+                  disposeModel(ceo.scene);
+                  return;
+                }
+                gateCharacter = ceo.scene;
+                // Stand beside the opening, facing the village along the positive Z axis.
+                gateCharacter.position.set(
+                  gatePosition.x + 1.8,
+                  groundHeight,
+                  gatePosition.z + 1.2,
+                );
+                scene.add(gateCharacter);
+                gateMixer = new THREE.AnimationMixer(gateCharacter);
+                gateMixer.clipAction(clip).setLoop(THREE.LoopRepeat, Infinity).play();
+              },
+              undefined,
+              (error) => console.error("Gate CEO load error:", error),
+            );
+          } else console.warn("Castle main gateway anchors missing; CEO was not placed.");
           framePictures = new FramePictures(gltf.scene, container);
           void initializePhysics()
             .then(() => {
@@ -285,7 +379,7 @@ export default function World({
       );
 
     loader.load(
-      "/models/character.glb",
+      preview ? characterAssets[model] : characterAssets.custom,
       (gltf) => {
         if (disposed) {
           disposeModel(gltf.scene);
@@ -294,19 +388,38 @@ export default function World({
         character = gltf.scene;
         if (!preview) {
           networkCharacters = new NetworkCharacters(scene, character, gltf.animations);
+          for (const fixed of ["person2", "person3", "ceo"] as const) {
+            loader.load(
+              characterAssets[fixed],
+              (asset) => {
+                if (disposed) {
+                  disposeModel(asset.scene);
+                  return;
+                }
+                playerTemplates.push(asset.scene);
+                networkCharacters?.addTemplate(fixed, asset.scene, asset.animations);
+              },
+              undefined,
+              (error) => {
+                console.error("Player model load error:", fixed, error);
+                if (!disposed)
+                  worldNotification.show(
+                    "A player character could not load. Please reload to try again.",
+                    "error",
+                  );
+              },
+            );
+          }
           return;
         }
         characterRef.current = character;
-        applyAppearance(character, appearanceRef.current);
-        player.add(character);
+        if (model === "custom") applyAppearance(character, appearanceRef.current);
+        player.add(normalizeCharacter(character));
         mixer = new THREE.AnimationMixer(character);
-        // Find Blender clips regardless of capitalization; missing clips are reported.
+        // Each model maps semantic movement states to its authored clip names.
         for (const state of ["Idle", "Walk", "Run"] as const) {
-          const clip = gltf.animations.find(
-            (clip) => clip.name.toLowerCase() === state.toLowerCase(),
-          );
-          if (clip) actions[state] = mixer.clipAction(clip);
-          else console.warn(`Character animation missing: ${state}`);
+          const clip = gltf.animations.find((clip) => clip.name === characterClips[model][state]);
+          if (clip) actions[state] = mixer.clipAction(movementClip(clip, character));
         }
         setAnimation("Idle");
       },
@@ -411,6 +524,8 @@ export default function World({
       }
       // Keep idle and preview animations advancing even when the player is not moving.
       mixer?.update(delta);
+      gateMixer?.update(delta);
+      for (const dancer of gardenDancers) dancer.update(delta);
       // Shift the camera by the player movement to preserve the current orbit offset.
       displacement.subVectors(player.position, previousPosition);
       camera.position.add(displacement);
@@ -445,14 +560,18 @@ export default function World({
       renderer.setAnimationLoop(null);
       mixer?.stopAllAction();
       if (character) mixer?.uncacheRoot(character);
+      gateMixer?.stopAllAction();
+      if (gateCharacter) gateMixer?.uncacheRoot(gateCharacter);
+      for (const dancer of gardenDancers) dancer.dispose();
       controls.dispose();
       dracoLoader.dispose();
       disposeModel(scene);
       if (!preview && character) disposeModel(character);
+      for (const template of playerTemplates) disposeModel(template);
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [preview, name]);
+  }, [preview, name, model]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

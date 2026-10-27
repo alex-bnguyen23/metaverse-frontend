@@ -3,10 +3,17 @@ import { useEffect, useState } from "react";
 import { Notification } from "../utils/notifications";
 import type { ConnectionStatus, MultiplayerSession } from "../network/MultiplayerSession";
 import type { Appearance } from "../utils/appearance";
+import type { CharacterModel } from "../network/protocol";
 import World from "../components/World";
 import ChatInput from "../components/ChatInput";
 // Reuse the look held by App when entering the explorable scene.
-export default function WorldPage({ appearance }: { appearance: Appearance }) {
+export default function WorldPage({
+  appearance,
+  model,
+}: {
+  appearance: Appearance;
+  model: CharacterModel;
+}) {
   const location = useLocation();
   const [session, setSession] = useState<MultiplayerSession | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>({
@@ -38,7 +45,13 @@ export default function WorldPage({ appearance }: { appearance: Appearance }) {
   return (
     <>
       <main className="world-page">
-        <World appearance={appearance} name={name} onStatus={setStatus} onSession={setSession} />
+        <World
+          appearance={appearance}
+          model={model}
+          name={name}
+          onStatus={setStatus}
+          onSession={setSession}
+        />
         {session && (
           <ChatInput key={name} session={session} connected={status.state === "connected"} />
         )}

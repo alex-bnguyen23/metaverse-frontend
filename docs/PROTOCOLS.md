@@ -20,6 +20,8 @@
 
 ## Shared Data Types
 
+The frontend supports selectable `custom`, `person2`, `person3`, and `ceo` models. [CHARACTER_SELECTION.md](CHARACTER_SELECTION.md) specifies validation, rendering and rollout requirements. The separate backend must implement this extension; backend support has not been verified.
+
 ```ts
 export type Appearance = {
   shirt: 0 | 1 | 2;
@@ -36,14 +38,17 @@ export type Vector3 = {
 
 export type AnimationState = "Idle" | "Walk" | "Run";
 
+export type CharacterSelection =
+  | { model: "custom"; appearance: Appearance }
+  | { model: "person2" | "person3" | "ceo"; appearance: null };
+
 export type PlayerState = {
   id: string;
   name: string;
-  appearance: Appearance;
   position: Vector3;
   rotation: number;
   animation: AnimationState;
-};
+} & CharacterSelection;
 
 export type PlayerMovement = {
   sequence: number;
@@ -57,13 +62,14 @@ export type PlayerMovement = {
 
 ### `player:join`
 
-Sent once after the player finishes customizing their appearance.
+Sent once after the player selects a model and, for custom only, finishes customizing appearance. Fixed selections send `appearance: null`; model and appearance stay immutable for the session.
 
 ```json
 {
   "type": "player:join",
   "payload": {
     "name": "Player1",
+    "model": "custom",
     "appearance": {
       "shirt": 1,
       "pants": 0,
@@ -74,7 +80,7 @@ Sent once after the player finishes customizing their appearance.
 }
 ```
 
-The backend validates the appearance, assigns the player ID and initial spawn position, and stores the player.
+The backend validates the model/appearance combination, assigns the player ID and initial spawn position, and stores the player.
 
 ### `player:move`
 
@@ -155,6 +161,7 @@ Broadcast to existing players when someone successfully joins.
     "player": {
       "id": "player-456",
       "name": "Player2",
+      "model": "custom",
       "appearance": {
         "shirt": 2,
         "pants": 1,

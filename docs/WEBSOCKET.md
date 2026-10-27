@@ -2,20 +2,24 @@
 
 Connect to `ws://localhost:3000/` (use your configured port and `wss://` behind HTTPS). All messages use `{ "type": "...", "payload": { ... } }`.
 
-Send `player:join` within 10 seconds with `{ name, appearance }`. Names are trimmed and must contain 1-24 characters. Appearance stays fixed for the session. See [PROTOCOLS.md](PROTOCOLS.md) for the full player schemas.
+Send `player:join` within 10 seconds with `{ name, model, appearance }`. Names are trimmed and must contain 1-24 characters. Model and appearance stay fixed for the session. `model` is `custom`, `person2`, `person3` or `ceo`; custom requires the existing appearance object and fixed models require `appearance: null`. See [PROTOCOLS.md](PROTOCOLS.md) for the full player schemas.
 
 After `world:init`, send `player:move` with `{ sequence, position: { x, y, z }, rotation, animation }`. Sequence numbers are nonnegative safe integers and must increase. Position and rotation must be finite numbers; animation must be `Idle`, `Walk`, or `Run`.
 
 The frontend calculates movement, physics, and collisions. The server stores accepted values without modifying them and forwards changed states to other joined players, excluding the sender. There is no simulation loop or movement timeout. Send only changes, including a final `Idle` state when stopping. A rolling limit of 20 movement messages per second is enforced per session with `RATE_LIMITED` errors. No coordinate bounds are currently configured; all finite coordinates are accepted.
 
-| Event           | Payload                                                               |
-| --------------- | --------------------------------------------------------------------- |
-| `world:init`    | `{ playerId, players, vehicles }`, including yourself and appearances |
-| `player:joined` | `{ player }`, including appearance                                    |
-| `player:update` | `{ id, sequence, position, rotation, animation }`                     |
-| `player:left`   | `{ id }`                                                              |
-| `chat:message`  | `{ id, senderId, senderName, text, timestamp }`                       |
-| `server:error`  | `{ code, message }`                                                   |
+| Event           | Payload                                                                          |
+| --------------- | -------------------------------------------------------------------------------- |
+| `world:init`    | `{ playerId, players, vehicles }`, including yourself, model IDs and appearances |
+| `player:joined` | `{ player }`, including model and appearance                                     |
+| `player:update` | `{ id, sequence, position, rotation, animation }`                                |
+| `player:left`   | `{ id }`                                                                         |
+| `chat:message`  | `{ id, senderId, senderName, text, timestamp }`                                  |
+| `server:error`  | `{ code, message }`                                                              |
+
+## Character selection
+
+The model-selection join extension is documented in [CHARACTER_SELECTION.md](CHARACTER_SELECTION.md). It adds a session-fixed model ID, nullable appearance for fixed models, and selection fields in full player snapshots. The frontend implements it; the separate backend must be updated before fixed-model joins work.
 
 ## Chat
 

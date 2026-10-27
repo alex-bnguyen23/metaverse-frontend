@@ -138,7 +138,7 @@ const player = (id) => ({
 });
 const wire = (type, payload) => JSON.stringify({ type, payload });
 
-function harness(playerName = "Alice") {
+function harness(playerName = "Alice", selection = appearance) {
   let now = 0;
   let nextTimer = 0;
   const timers = new Map();
@@ -185,7 +185,7 @@ function harness(playerName = "Alice") {
     },
     clearTimeout: (id) => timers.delete(id),
   });
-  const session = new MultiplayerSession("ws://test", playerName, appearance, (status) =>
+  const session = new MultiplayerSession("ws://test", playerName, selection, (status) =>
     statuses.push(status),
   );
   return {
@@ -462,8 +462,14 @@ test("characters deduplicate, own their colors and release only owned resources 
   characters.update(players, 0.05);
   assert.equal(characters.objects.size, 2);
   assert.equal(scene.children.length, 2);
-  const ownMaterial = characters.objects.get("a").children[0].material;
-  const otherMaterial = characters.objects.get("b").children[0].material;
+  let ownMaterial;
+  characters.objects.get("a").traverse((object) => {
+    if (object.isMesh) ownMaterial = object.material;
+  });
+  let otherMaterial;
+  characters.objects.get("b").traverse((object) => {
+    if (object.isMesh) otherMaterial = object.material;
+  });
   assert.notEqual(ownMaterial.color.getHex(), otherMaterial.color.getHex());
   assert.notEqual(ownMaterial, material);
   let materialDisposals = 0;
@@ -882,4 +888,96 @@ test("rejected occupancy requests still consume the separate rolling budget", ()
   h.session.requestEnter();
   assert.equal(socket.sent.filter((m) => m.type === "vehicle:enter").length, 3);
   h.session.stop();
+});
+
+test("character snapshots validate fixed appearances and normalize legacy custom players", () => {
+  const parse = (p) => protocol.parseServerMessage(wire("player:joined", { player: p }));
+  assert.equal(parse(player("a")).payload.player.model, "custom");
+  for (const model of ["person2", "person3", "ceo"]) {
+    const fixed = { ...player("a"), model, appearance: null };
+    assert.equal(parse(fixed).payload.player.model, model);
+    assert.equal(parse({ ...fixed, appearance }), null);
+  }
+  for (const invalid of [
+    { ...player("a"), model: "unknown" },
+    { ...player("a"), model: null },
+    { ...player("a"), appearance: null },
+  ])
+    assert.equal(parse(invalid), null);
+});
+
+test("fixed selection survives join, movement, reconnect and detects an incompatible backend", () => {
+  const h = harness("Alice", { model: "person2", appearance: null });
+  h.session.start();
+  const socket = h.sockets[0];
+  socket.open();
+  assert.equal(socket.sent[0].payload.model, "person2");
+  assert.equal(socket.sent[0].payload.appearance, null);
+  socket.receive("world:init", {
+    playerId: "a",
+    players: [{ ...player("a"), model: "person2", appearance: null }],
+  });
+  h.session.setMovement({ position: { x: 1, y: 0, z: 0 }, rotation: 0, animation: "Walk" });
+  h.tick();
+  assert.equal(h.session.players.get("a").model, "person2");
+  assert.equal("model" in socket.sent.at(-1).payload, false);
+  socket.close();
+  h.retry();
+  h.sockets[1].open();
+  assert.equal(h.sockets[1].sent[0].payload.model, "person2");
+  h.sockets[1].receive("world:init", { playerId: "b", players: [player("b")] });
+  assert.equal(h.statuses.at(-1).state, "error");
+  assert.equal(h.session.playerId, null);
+  h.session.stop();
+});
+
+test("fixed characters normalize height, map locomotion, restore rest pose and share only assets", () => {
+  const appearanceModule = loadModule("../src/utils/appearance.ts", { require: () => THREE });
+  const { NetworkCharacters } = loadModule("../src/components/NetworkCharacters.ts", {
+    require: (name) =>
+      name === "three" ? THREE : name.includes("SkeletonUtils") ? skeletonUtils : appearanceModule,
+  });
+  const scene = new THREE.Scene();
+  const template = new THREE.Group();
+  const hip = new THREE.Group();
+  hip.name = "Hips";
+  const geometry = new THREE.BoxGeometry(1, 2, 1);
+  const material = new THREE.MeshStandardMaterial({ color: 0x123456 });
+  material.name = "Switchable shirt";
+  hip.add(new THREE.Mesh(geometry, material));
+  template.add(hip);
+  const clip = new THREE.AnimationClip("Walking", 1, [
+    new THREE.VectorKeyframeTrack("Hips.position", [0, 1], [0, 0, 0, 5, 0, 5]),
+    new THREE.NumberKeyframeTrack("Hips.rotation[y]", [0, 1], [0, 1]),
+  ]);
+  const characters = new NetworkCharacters(scene, template, []);
+  characters.addTemplate("ceo", template, [clip]);
+  const fixed = (id, animation) => ({ ...player(id), model: "ceo", appearance: null, animation });
+  const players = new Map([
+    ["a", fixed("a", "Walk")],
+    ["b", fixed("b", "Idle")],
+  ]);
+  characters.update(players, 0.5, "a");
+  const a = characters.objects.get("a");
+  const b = characters.objects.get("b");
+  assert.equal(a.getObjectByName("Hips").position.x, 0);
+  assert.ok(a.getObjectByName("Hips").rotation.y > 0);
+  assert.equal(b.getObjectByName("Hips").rotation.y, 0);
+  const bounds = new THREE.Box3().setFromObject(b);
+  assert.ok(Math.abs(bounds.max.y - bounds.min.y - 1.6) < 1e-6);
+  assert.ok(Math.abs(bounds.min.y) < 1e-6);
+  let renderedMaterial;
+  a.traverse((o) => {
+    if (o.isMesh) renderedMaterial = o.material;
+  });
+  assert.equal(renderedMaterial.color.getHex(), material.color.getHex());
+  players.set("a", fixed("a", "Idle"));
+  characters.update(players, 0.1, "a");
+  assert.equal(a.getObjectByName("Hips").rotation.y, 0);
+  players.delete("a");
+  characters.update(players, 0.1);
+  assert.equal(characters.objects.size, 1);
+  characters.dispose();
+  geometry.dispose();
+  material.dispose();
 });

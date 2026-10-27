@@ -2,6 +2,7 @@ import type { Appearance } from "../utils/appearance";
 import {
   parseServerMessage,
   type ClientMessage,
+  type CharacterSelection,
   type PlayerMovement,
   type PlayerState,
   type ChatMessage,
@@ -173,7 +174,7 @@ export class MultiplayerSession {
   private readonly remoteSequences = new Map<string, number>();
   private readonly url: string;
   private readonly name: string;
-  private readonly appearance: Appearance;
+  private readonly selection: CharacterSelection;
   private readonly notify: (status: ConnectionStatus) => void;
   private chat: ChatSnapshot = { messages: [], error: null };
   private readonly chatListeners = new Set<() => void>();
@@ -219,12 +220,17 @@ export class MultiplayerSession {
   constructor(
     url: string,
     name: string,
-    appearance: Appearance,
+    appearance: Appearance | CharacterSelection,
     notify: (status: ConnectionStatus) => void,
   ) {
     this.url = url;
     this.name = name.trim();
-    this.appearance = { ...appearance };
+    this.selection =
+      "model" in appearance
+        ? appearance.model === "custom"
+          ? { model: "custom", appearance: { ...appearance.appearance } }
+          : { model: appearance.model, appearance: null }
+        : { model: "custom", appearance: { ...appearance } };
     this.notify = notify;
   }
 
@@ -322,7 +328,7 @@ export class MultiplayerSession {
       this.lastMovement = "";
       this.movement = null;
       this.remoteSequences.clear();
-      this.send({ type: "player:join", payload: { name: this.name, appearance: this.appearance } });
+      this.send({ type: "player:join", payload: { name: this.name, ...this.selection } });
     };
     socket.onmessage = (event: MessageEvent<unknown>) => {
       if (this.stopped || this.rejected) return;
@@ -331,6 +337,18 @@ export class MultiplayerSession {
       switch (message.type) {
         case "world:init": {
           if (this.playerId) return;
+          const own = message.payload.players.find(
+            (player) => player.id === message.payload.playerId,
+          );
+          if (own?.model !== this.selection.model) {
+            this.rejected = true;
+            this.status(
+              "error",
+              "The backend did not accept this character. Update the backend or choose Custom.",
+            );
+            socket.close();
+            return;
+          }
           clearTimeout(this.timeout);
           this.players.clear();
           for (const player of message.payload.players) this.players.set(player.id, player);

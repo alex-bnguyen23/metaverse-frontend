@@ -1,15 +1,18 @@
 import type { Appearance } from "../utils/appearance";
 
+export type CharacterModel = "custom" | "person2" | "person3" | "ceo";
+export type CharacterSelection =
+  | { model: "custom"; appearance: Appearance }
+  | { model: "person2" | "person3" | "ceo"; appearance: null };
 export type Vector3 = { x: number; y: number; z: number };
 export type AnimationState = "Idle" | "Walk" | "Run";
 export type PlayerState = {
   id: string;
   name: string;
-  appearance: Appearance;
   position: Vector3;
   rotation: number;
   animation: AnimationState;
-};
+} & CharacterSelection;
 export type PlayerMovement = {
   sequence: number;
   position: Vector3;
@@ -77,7 +80,7 @@ export type ClientMessage =
       type: "vehicle:exit";
       payload: { vehicleId: "cybertruck-1"; revision: number; position: Vector3; rotation: number };
     }
-  | { type: "player:join"; payload: { name: string; appearance: Appearance } }
+  | { type: "player:join"; payload: { name: string } & CharacterSelection }
   | { type: "player:move"; payload: PlayerMovement }
   | { type: "chat:send"; payload: ChatSendPayload };
 
@@ -97,21 +100,21 @@ function transform(value: Record<string, unknown>) {
   );
 }
 function player(value: unknown): value is PlayerState {
-  if (
-    !record(value) ||
-    !id(value.id) ||
-    typeof value.name !== "string" ||
-    !record(value.appearance)
-  )
+  if (!record(value) || !id(value.id) || typeof value.name !== "string" || !transform(value))
     return false;
+  if (value.model === "person2" || value.model === "person3" || value.model === "ceo")
+    return value.appearance === null;
+  if (value.model !== undefined && value.model !== "custom") return false;
+  if (!record(value.appearance)) return false;
   const a = value.appearance;
-  return (
+  const valid =
     (a.shirt === 0 || a.shirt === 1 || a.shirt === 2) &&
     (a.pants === 0 || a.pants === 1) &&
     (a.hairstyle === 0 || a.hairstyle === 1) &&
-    (a.glasses === 0 || a.glasses === 1) &&
-    transform(value)
-  );
+    (a.glasses === 0 || a.glasses === 1);
+  // Normalize legacy custom snapshots before they enter the player map.
+  if (valid) value.model = "custom";
+  return valid;
 }
 const integer = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

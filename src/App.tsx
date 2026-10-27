@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { loadAppearance, STORAGE_KEY } from "./utils/appearance";
+import type { CharacterModel } from "./network/protocol";
 import DressPage from "./pages/DressPage";
 import WorldPage from "./pages/WorldPage";
 import { LandingPage } from "./pages/LandingPage";
@@ -10,6 +11,21 @@ import "react-toastify/dist/ReactToastify.css";
 // Own appearance above both routes so navigation preserves the selected look.
 export default function App() {
   // A function initializer reads storage when state is created, rather than on every render.
+  const [model, setModel] = useState<CharacterModel>(() => {
+    try {
+      const saved = sessionStorage.getItem("osaka-character-model");
+      return saved === "person2" || saved === "person3" || saved === "ceo" ? saved : "custom";
+    } catch {
+      return "custom";
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("osaka-character-model", model);
+    } catch {
+      /* Keep the in-memory choice. */
+    }
+  }, [model]);
   const [appearance, setAppearance] = useState(loadAppearance);
   // Persist after each selection; navigation keeps the same in-memory state.
   useEffect(() => {
@@ -28,9 +44,16 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route
             path="/dress"
-            element={<DressPage appearance={appearance} onChange={setAppearance} />}
+            element={
+              <DressPage
+                appearance={appearance}
+                onChange={setAppearance}
+                model={model}
+                onModelChange={setModel}
+              />
+            }
           />
-          <Route path="/world" element={<WorldPage appearance={appearance} />} />
+          <Route path="/world" element={<WorldPage appearance={appearance} model={model} />} />
           <Route path="*" element={<Navigate to="/dress" replace />} />
         </Routes>
       </BrowserRouter>

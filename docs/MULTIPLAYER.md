@@ -14,6 +14,8 @@ WASD and the arrow keys follow the camera viewpoint continuously. Up/Down/Left/R
 
 ## Local physics
 
+For the dressing-room choice between the existing customizable character and fixed person 2 / person 3 / CEO models, see [CHARACTER_SELECTION.md](CHARACTER_SELECTION.md). That specification defines backend synchronization, rendering, animation mapping and rollout checks; the frontend implements it and requires the extended backend contract for fixed-model joins.
+
 The world and character share a `GLTFLoader` configured with `DRACOLoader` for Draco-compressed Blender exports. Vite bundles the matching Three.js decoder wrapper and WASM via URL imports, so decoding needs no external CDN or manually copied public assets. The scene releases decoder workers on unmount. After changing compressed assets, verify both the world and dressing-room preview load in development and the production build.
 
 `TouchJoystick.tsx` displays a 156px circular joystick centered horizontally above chat when the viewport is at most 1024px wide or a coarse pointer is available. Drag outside the center dead zone to walk in any camera-relative direction. Holding outside the dead zone for one second automatically runs; centering or releasing stops movement and resets the timer. Pointer capture supports releasing outside the control. Cancellation, focus changes, page hiding, input-mode changes, and unmount clear movement and timers. Keyboard controls and the WebSocket protocol remain unchanged. `TouchMovementControls.tsx` remains in the project but is not rendered. The joystick is hidden in the dressing preview. Verify arbitrary drag directions, the dead zone, auto-run after one second, release, camera dragging with another finger, chat focus, and returning after hiding the page.
@@ -59,3 +61,19 @@ A single React Toastify container in `App.tsx` displays up to four notifications
 `utils/notifications.ts` owns each notification so async progress updates the same toast and leaving a screen dismisses its notifications. Vehicle errors are emitted on state transitions, never repeatedly from the render loop. Background frame metadata/image refresh failures remain console-only. No WebSocket or HTTP payloads change.
 
 Verify upload success/failure, world loading/failure, chat rate-limit errors, vehicle rejections, connection loss/recovery, automatic dismissal, and leaving the world during an upload. Ensure notifications do not cover the joystick or chat controls on mobile.
+
+## Castle gateway CEO
+
+The main world loads `public/models/ceo-character.glb` once after the castle loads. A decorative CEO stands 1.8 units to the side and 1.2 units toward the village from `Gateway_Gold_Lintel`, at the top surface height of `Gateway_Approach_Path`. It faces positive Z toward arriving visitors. Only `Agree_Gesture` plays, repeating indefinitely through the existing delta-time render loop. The dressing-room preview does not load it.
+
+This stationary decoration is independent of player sessions and consumes no multiplayer slot or WebSocket messages. It has no interaction or additional collider. Its mixer stops and releases its animation bindings on unmount; scene cleanup disposes the model resources. A load finishing after unmount is disposed immediately. Missing gateway anchors or a missing clip are logged rather than placing a character at an arbitrary location.
+
+Verify in the browser that the CEO stands on the approach beside the main gateway, faces the village, loops the gesture without playing other clips, and disappears cleanly when leaving the world. Visual placement remains a manual asset check.
+
+## Castle garden dancers
+
+The main world loads `person1.glb` and `person2.glb` once each beside the west garden bench (`Garden_Bench_1_Seat_Slat_2`). Person 1 stands at approximately (-11, 0.05, 5); person 2 at (-11, 0.05, 10), facing positive Z. Person 1 alternates `All_Night_Dance` and `Breakdance_1990`; person 2 alternates `dance_05` and `dance_02`. Each clip plays once before switching to the next, repeating the pair indefinitely. `GardenDancer` advances mixers with render delta time and removes its completion listener and animation bindings on cleanup. World owns model disposal, including downloads finishing after unmount.
+
+Person 2 is rendered at twice its imported scale; person 1 keeps its imported scale.
+
+These decorative characters have no player slots, collision bodies, interactions or network messages. They are omitted from the dressing preview. Missing anchors or clips are logged and skip the affected decoration. Verify garden placement, feet height, both alternating sequences, and cleanup when leaving in the browser; playback phases are local to each visitor.
