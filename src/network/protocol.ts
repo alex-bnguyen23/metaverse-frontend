@@ -19,9 +19,12 @@ export type PlayerMovement = {
   rotation: number;
   animation: AnimationState;
 };
+export type VehicleSeat = "driver" | "passenger";
+export type VehicleTransition = { vehicle: VehicleState; playerId: string; seat: VehicleSeat };
 export type VehicleState = {
   id: "cybertruck-1";
   driverId: string | null;
+  passengerId: string | null;
   revision: number;
   position: Vector3;
   rotation: number;
@@ -29,7 +32,7 @@ export type VehicleState = {
   steering: number;
   wheelAngle: number;
 };
-export type VehicleMovement = Omit<VehicleState, "id" | "driverId"> & {
+export type VehicleMovement = Omit<VehicleState, "id" | "driverId" | "passengerId"> & {
   vehicleId: "cybertruck-1";
   sequence: number;
 };
@@ -42,13 +45,12 @@ export type ChatMessage = {
 };
 export type ChatSendPayload = { text: string };
 export type ServerMessage =
-  | { type: "vehicle:occupied"; payload: { vehicle: VehicleState } }
+  | { type: "vehicle:occupied"; payload: VehicleTransition }
   | { type: "vehicle:update"; payload: { vehicle: VehicleState; sequence: number } }
   | {
       type: "vehicle:released";
-      payload:
-        | { vehicle: VehicleState; player: PlayerState; reason: "exit" }
-        | { vehicle: VehicleState; player: null; reason: "disconnect" };
+      payload: VehicleTransition &
+        ({ player: PlayerState; reason: "exit" } | { player: null; reason: "disconnect" });
     }
   | {
       type: "world:init";
@@ -74,7 +76,10 @@ export type ServerMessage =
       };
     };
 export type ClientMessage =
-  | { type: "vehicle:enter"; payload: { vehicleId: "cybertruck-1"; revision: number } }
+  | {
+      type: "vehicle:enter";
+      payload: { vehicleId: "cybertruck-1"; revision: number; seat: VehicleSeat };
+    }
   | { type: "vehicle:move"; payload: VehicleMovement }
   | {
       type: "vehicle:exit";
@@ -124,6 +129,8 @@ export function vehicle(value: unknown): value is VehicleState {
   return (
     value.id === "cybertruck-1" &&
     (value.driverId === null || id(value.driverId)) &&
+    (value.passengerId === null || id(value.passengerId)) &&
+    (value.driverId === null || value.driverId !== value.passengerId) &&
     integer(value.revision) &&
     finite(p.x) &&
     finite(p.y) &&
@@ -167,10 +174,12 @@ export function parseServerMessage(data: unknown): ServerMessage | null {
           (Array.isArray(p.vehicles) &&
             p.vehicles.length === 1 &&
             p.vehicles.every(vehicle) &&
-            p.vehicles.every(
-              (v) =>
-                v.driverId === null ||
-                (p.players as PlayerState[]).some((player) => player.id === v.driverId),
+            p.vehicles.every((v) =>
+              [v.driverId, v.passengerId].every(
+                (occupant) =>
+                  occupant === null ||
+                  (p.players as PlayerState[]).some((player) => player.id === occupant),
+              ),
             ))) &&
         new Set(p.players.map((p) => p.id)).size === p.players.length &&
         p.players.some((player) => player.id === p.playerId);
@@ -187,7 +196,11 @@ export function parseServerMessage(data: unknown): ServerMessage | null {
         p.sequence >= 0;
       break;
     case "vehicle:occupied":
-      valid = vehicle(p.vehicle) && p.vehicle.driverId !== null;
+      valid =
+        vehicle(p.vehicle) &&
+        id(p.playerId) &&
+        (p.seat === "driver" || p.seat === "passenger") &&
+        p.vehicle[p.seat === "driver" ? "driverId" : "passengerId"] === p.playerId;
       break;
     case "vehicle:update":
       valid = vehicle(p.vehicle) && p.vehicle.driverId !== null && integer(p.sequence);
@@ -195,8 +208,15 @@ export function parseServerMessage(data: unknown): ServerMessage | null {
     case "vehicle:released":
       valid =
         vehicle(p.vehicle) &&
-        p.vehicle.driverId === null &&
-        ((p.reason === "exit" && player(p.player) && p.player.animation === "Idle") ||
+        id(p.playerId) &&
+        (p.seat === "driver" || p.seat === "passenger") &&
+        p.vehicle[p.seat === "driver" ? "driverId" : "passengerId"] === null &&
+        p.vehicle.driverId !== p.playerId &&
+        p.vehicle.passengerId !== p.playerId &&
+        ((p.reason === "exit" &&
+          player(p.player) &&
+          p.player.id === p.playerId &&
+          p.player.animation === "Idle") ||
           (p.reason === "disconnect" && p.player === null));
       break;
     case "player:left":

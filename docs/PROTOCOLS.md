@@ -287,7 +287,13 @@ Other error codes may include:
 
 ## Vehicle Protocol Extension
 
-The backend contract is implemented by the frontend message types, validation, driving controls, and rendering. Automated transport tests verify the wire messages; live backend/browser integration still requires verification. Existing walking and chat messages remain unchanged.
+The implemented frontend two-seat contract is defined in [VEHICLE_PASSENGER.md](VEHICLE_PASSENGER.md). It specifies one driver and one passenger, explicit seat requests, independent releases, passenger synchronization, revision resets, errors and backend acceptance checks. The frontend uses this contract; the separate backend must implement it too. Live browser/backend integration remains unverified.
+
+### Legacy single-driver contract
+
+The remainder of this vehicle section preserves the previous single-driver contract for migration reference. For the two-seat rollout, VEHICLE_PASSENGER.md supersedes these vehicle schemas and behavior, including the assumption that every release empties the driver seat. Do not combine the two contracts.
+
+These legacy schemas are superseded by VEHICLE_PASSENGER.md. Existing walking and chat messages remain unchanged.
 
 ### Shared Configuration
 

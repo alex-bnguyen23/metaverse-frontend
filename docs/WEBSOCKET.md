@@ -33,6 +33,10 @@ The server trims text, accepts up to 200 Unicode code points, and permits one ac
 
 ## Vehicles
 
+For driver-plus-passenger support, implement [VEHICLE_PASSENGER.md](VEHICLE_PASSENGER.md) on both frontend and backend. It adds explicit `passengerId` to snapshots and `seat` to entry requests; occupied/released broadcasts identify the affected `playerId` and `seat`. Only the driver sends movement. Both occupants stop walking reports, exit independently while stopped, and count toward the existing five-player room limit. Every seat transition resets vehicle movement ordering through a new revision. Driver disconnect stops the truck and retains the passenger; passenger disconnect retains driver motion.
+
+The frontend now uses the two-seat contract; live browser integration remains unverified. The following preserves the legacy single-driver contract for migration reference. Its payloads are incompatible with the target two-seat contract; coordinate deployment and reconnect/reload clients before enabling passengers.
+
 `world:init` includes the current shared `cybertruck-1`, initially at `(-35, 0, 0)` with heading `Math.PI / 2`. See [PROTOCOLS.md](PROTOCOLS.md#vehicle-protocol-extension) for schemas, shared limits, and frontend integration requirements.
 
 - Send `vehicle:enter` with `{ vehicleId, revision }` within 3 world units. Wait for `vehicle:occupied` before driving.

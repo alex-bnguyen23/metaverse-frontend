@@ -46,8 +46,22 @@ export class VehicleController {
       this.exiting = true;
       return;
     }
-    if (v.driverId) {
-      session.vehicleError = "The truck already has a driver.";
+    if (session.passenger) {
+      if (v.speed !== 0) {
+        session.vehicleError = "Wait for the driver to stop before exiting.";
+        return;
+      }
+      const exit = physics.findExit(v.position, v.rotation);
+      if (exit) session.requestExit(exit, v.rotation);
+      else session.vehicleError = "No safe place to exit. Ask the driver to move to clear ground.";
+      return;
+    }
+    if (v.driverId && v.passengerId) {
+      session.vehicleError = "Both truck seats are occupied.";
+      return;
+    }
+    if (v.speed !== 0) {
+      session.vehicleError = "Wait for the truck to stop before entering.";
       return;
     }
     if (
@@ -60,7 +74,7 @@ export class VehicleController {
       session.vehicleError = "Move closer to the truck to enter.";
       return;
     }
-    session.requestEnter();
+    session.requestEnter(v.driverId ? "passenger" : "driver");
   }
 
   update(
@@ -79,7 +93,7 @@ export class VehicleController {
     if (!this.displayed || this.revision !== state.revision) {
       this.displayed = { ...state, position: { ...state.position } };
       this.revision = state.revision;
-      this.exiting = false;
+      this.exiting = this.exiting && session.driving;
     }
     const v = this.displayed;
     // Freeze the stopped prediction while waiting for its acknowledgement and the exit grant.

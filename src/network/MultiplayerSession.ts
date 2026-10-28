@@ -7,6 +7,7 @@ import {
   type PlayerState,
   type ChatMessage,
   type VehicleState,
+  type VehicleSeat,
   type Vector3,
 } from "./protocol";
 
@@ -53,10 +54,12 @@ export class MultiplayerSession {
     if (
       this.queuedExit &&
       v &&
-      this.driving &&
-      this.stoppedVehicleSequence >= 0 &&
-      this.acceptedStoppedSequence === this.stoppedVehicleSequence &&
-      this.lastVehicle === JSON.stringify(v) &&
+      this.inVehicle &&
+      v.speed === 0 &&
+      (this.passenger ||
+        (this.stoppedVehicleSequence >= 0 &&
+          this.acceptedStoppedSequence === this.stoppedVehicleSequence &&
+          this.lastVehicle === JSON.stringify(v))) &&
       this.hasMovementBudget(this.occupancySends, 2)
     ) {
       if (
@@ -75,17 +78,29 @@ export class MultiplayerSession {
     return !!this.playerId && this.vehicle?.driverId === this.playerId;
   }
 
-  requestEnter() {
+  get passenger() {
+    return !!this.playerId && this.vehicle?.passengerId === this.playerId;
+  }
+
+  get inVehicle() {
+    return this.driving || this.passenger;
+  }
+
+  requestEnter(seat: VehicleSeat = "driver") {
     const v = this.vehicle;
     if (
       !this.playerId ||
       !v ||
-      v.driverId ||
+      this.inVehicle ||
+      v.speed !== 0 ||
+      v[seat === "driver" ? "driverId" : "passengerId"] ||
       this.vehiclePending ||
       !this.hasMovementBudget(this.occupancySends, 2)
     )
       return;
-    if (this.send({ type: "vehicle:enter", payload: { vehicleId: v.id, revision: v.revision } })) {
+    if (
+      this.send({ type: "vehicle:enter", payload: { vehicleId: v.id, revision: v.revision, seat } })
+    ) {
       this.occupancySends.push(performance.now());
       this.vehiclePending = true;
       this.vehicleRequestAt = performance.now();
@@ -95,7 +110,7 @@ export class MultiplayerSession {
 
   requestExit(position: Vector3, rotation: number) {
     const v = this.vehicle;
-    if (!v || !this.driving || v.speed !== 0 || this.vehiclePending) return false;
+    if (!v || !this.inVehicle || v.speed !== 0 || this.vehiclePending) return false;
     // The publish timer sends the final stopped state before exit, without exceeding 20 Hz.
     this.queuedExit = { position: { ...position }, rotation };
     this.vehiclePending = true;
@@ -107,20 +122,22 @@ export class MultiplayerSession {
   setVehicleMovement(state: VehicleState) {
     if (!this.driving || !this.vehicle || state.revision !== this.vehicle.revision) return;
     this.vehicle = { ...state, position: { ...state.position } };
-    this.syncDriver();
+    this.syncOccupants();
   }
 
-  private syncDriver() {
+  private syncOccupants() {
     const v = this.vehicle;
-    if (!v?.driverId) return;
-    const player = this.players.get(v.driverId);
-    if (player)
-      this.players.set(player.id, {
-        ...player,
-        position: { ...v.position },
-        rotation: v.rotation,
-        animation: "Idle",
-      });
+    if (!v) return;
+    for (const id of [v.driverId, v.passengerId]) {
+      const player = id ? this.players.get(id) : undefined;
+      if (player)
+        this.players.set(player.id, {
+          ...player,
+          position: { ...v.position },
+          rotation: v.rotation,
+          animation: "Idle",
+        });
+    }
   }
 
   private flushVehicle() {
@@ -251,7 +268,7 @@ export class MultiplayerSession {
   /** Copy local simulation output so later frame mutations cannot change a queued payload. */
   setMovement(movement: Movement) {
     if (
-      this.driving ||
+      this.inVehicle ||
       !this.playerId ||
       ![movement.position.x, movement.position.y, movement.position.z, movement.rotation].every(
         Number.isFinite,
@@ -287,7 +304,7 @@ export class MultiplayerSession {
 
   private flushMovement() {
     if (
-      this.driving ||
+      this.inVehicle ||
       !this.hasMovementBudget(this.walkingSends) ||
       !this.playerId ||
       !this.movement ||
@@ -355,7 +372,7 @@ export class MultiplayerSession {
           this.playerId = message.payload.playerId;
           this.resetVehicle();
           this.vehicle = message.payload.vehicles?.[0] ?? null;
-          this.syncDriver();
+          this.syncOccupants();
           this.attempts = 0;
           this.lastChatSent = -Infinity;
           this.updateChat({ error: null });
@@ -367,12 +384,16 @@ export class MultiplayerSession {
           if (!this.playerId) return;
           const v = message.payload.vehicle;
           if (!this.vehicle || v.revision <= this.vehicle.revision) return;
-          const previousDriver = this.vehicle.driverId;
-          if (message.type === "vehicle:occupied" && !this.players.has(v.driverId!)) return;
+          const { playerId, seat } = message.payload;
+          const key = seat === "driver" ? "driverId" : "passengerId";
+          const otherKey = seat === "driver" ? "passengerId" : "driverId";
+          // Each broadcast changes one seat; unknown occupants never enter scene state.
           if (
-            message.type === "vehicle:released" &&
-            message.payload.player &&
-            message.payload.player.id !== previousDriver
+            v[otherKey] !== this.vehicle[otherKey] ||
+            [v.driverId, v.passengerId].some((id) => id !== null && !this.players.has(id)) ||
+            (message.type === "vehicle:occupied"
+              ? this.vehicle[key] !== null || !this.players.has(playerId)
+              : this.vehicle[key] !== playerId)
           )
             return;
           this.vehicle = v;
@@ -381,16 +402,19 @@ export class MultiplayerSession {
           this.stoppedVehicleSequence = -1;
           this.acceptedStoppedSequence = -1;
           this.lastVehicle = "";
-          this.queuedExit = null;
-          this.vehiclePending = false;
-          this.vehicleError = null;
-          this.movement = null;
-          this.lastMovement = "";
+          // Another seat's transition resets ordering without acknowledging our request.
+          if (playerId === this.playerId) {
+            this.queuedExit = null;
+            this.vehiclePending = false;
+            this.vehicleError = null;
+            this.movement = null;
+            this.lastMovement = "";
+          }
           if (message.type === "vehicle:released" && message.payload.player) {
             this.players.set(message.payload.player.id, message.payload.player);
             if (message.payload.player.id === this.playerId) this.releaseVersion++;
           }
-          this.syncDriver();
+          this.syncOccupants();
           break;
         }
         case "vehicle:update": {
@@ -401,14 +425,18 @@ export class MultiplayerSession {
             socket.close();
             return;
           }
-          if (v.driverId !== this.vehicle.driverId || sequence <= this.acceptedVehicleSequence)
+          if (
+            v.driverId !== this.vehicle.driverId ||
+            v.passengerId !== this.vehicle.passengerId ||
+            sequence <= this.acceptedVehicleSequence
+          )
             return;
           this.acceptedVehicleSequence = sequence;
           this.acceptedStoppedSequence = v.speed === 0 ? sequence : -1;
           // Echoes acknowledge prediction; older reports must never rewind the local driver.
           if (!this.driving) {
             this.vehicle = v;
-            this.syncDriver();
+            this.syncOccupants();
           }
           break;
         }
@@ -423,6 +451,7 @@ export class MultiplayerSession {
           if (
             update.id === this.playerId ||
             update.id === this.vehicle?.driverId ||
+            update.id === this.vehicle?.passengerId ||
             update.sequence <= (this.remoteSequences.get(update.id) ?? -1)
           )
             return;
@@ -443,9 +472,17 @@ export class MultiplayerSession {
           this.status("connected", "Connected");
           break;
         case "server:error":
+          // In-flight reports from the previous epoch may be rejected after a seat broadcast.
+          // They must not cancel an exit waiting for a fresh stopped acknowledgement.
+          if (
+            message.payload.requestType === "vehicle:move" &&
+            message.payload.code === "STALE_VEHICLE_REVISION" &&
+            message.payload.revision === this.vehicle?.revision
+          )
+            break;
           if (
             this.playerId &&
-            !this.driving &&
+            !this.inVehicle &&
             message.payload.code === "RATE_LIMITED" &&
             (!message.payload.requestType || message.payload.requestType === "player:move")
           ) {
@@ -472,7 +509,9 @@ export class MultiplayerSession {
             this.vehiclePending = false;
             this.vehicleError = message.payload.message;
             if (
-              message.payload.code === "STALE_VEHICLE_REVISION" ||
+              (message.payload.code === "STALE_VEHICLE_REVISION" &&
+                (message.payload.revision === undefined ||
+                  message.payload.revision > (this.vehicle?.revision ?? -1))) ||
               message.payload.code === "NOT_VEHICLE_DRIVER" ||
               message.payload.code === "INVALID_VEHICLE_STATE"
             )

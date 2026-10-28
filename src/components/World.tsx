@@ -66,6 +66,7 @@ export default function World({
 }) {
   // Refs keep mutable scene objects available without triggering React renders each frame.
   const vehicleButtonRef = useRef<HTMLButtonElement>(null);
+  const vehicleRoleRef = useRef<HTMLDivElement>(null);
   const interactRef = useRef<() => void>(() => {});
   const containerRef = useRef<HTMLDivElement>(null);
   const characterRef = useRef<THREE.Object3D | null>(null);
@@ -210,7 +211,7 @@ export default function World({
       if (
         physics &&
         session?.playerId &&
-        !session.driving &&
+        !session.inVehicle &&
         simulatedPlayerId === session.playerId
       ) {
         physics.animation = "Idle";
@@ -468,7 +469,7 @@ export default function World({
             physics.spawn(local.position, local.rotation);
             simulatedPlayerId = session.playerId;
           }
-          if (local && !session.driving) {
+          if (local && !session.inVehicle) {
             physics.update(
               adaptMovementInput(
                 forward,
@@ -491,10 +492,21 @@ export default function World({
         const own = session.playerId ? networkCharacters?.objects.get(session.playerId) : undefined;
         if (own) player.position.copy(own.position);
         for (const [id, object] of networkCharacters?.objects ?? [])
-          object.visible = id !== session.vehicle?.driverId;
-        if (session.driving && vehicleController?.position)
+          object.visible = id !== session.vehicle?.driverId && id !== session.vehicle?.passengerId;
+        if (session.inVehicle && vehicleController?.position)
           player.position.copy(vehicleController.position);
         const v = session.vehicle;
+        const roleBadge = vehicleRoleRef.current;
+        if (roleBadge) {
+          const label = session.driving
+            ? "You are the driver"
+            : session.passenger
+              ? "You are a passenger"
+              : "";
+          // Update only on seat transitions so the live region stays quiet during movement.
+          if (roleBadge.textContent !== label) roleBadge.textContent = label;
+          roleBadge.hidden = !session.inVehicle;
+        }
         const near =
           !!v &&
           !!physics &&
@@ -504,15 +516,18 @@ export default function World({
             physics.position.z - v.position.z,
           ) <= 3;
         if (vehicleButtonRef.current) {
-          vehicleButtonRef.current.hidden = !session.driving && !near;
+          vehicleButtonRef.current.hidden = !session.inVehicle && !near;
           vehicleButtonRef.current.disabled =
-            session.vehiclePending || (!!v?.driverId && !session.driving);
+            session.vehiclePending ||
+            (!session.inVehicle && ((!!v?.driverId && !!v?.passengerId) || v?.speed !== 0));
           vehicleButtonRef.current.textContent = session.vehiclePending
             ? "Waiting for server..."
-            : session.driving
+            : session.inVehicle
               ? "Exit truck (E)"
               : v?.driverId
-                ? "Truck occupied"
+                ? v.passengerId
+                  ? "Truck full"
+                  : "Ride as passenger (E)"
                 : "Drive truck (E)";
         }
         // Report transitions only; the render loop must not create repeated toasts.
@@ -579,6 +594,14 @@ export default function World({
       {!preview && <TouchJoystick onChange={onTouchMovement} />}
       {!preview && (
         <div className="absolute left-3 top-36 z-10">
+          <div
+            ref={vehicleRoleRef}
+            hidden
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            className="pointer-events-none mb-2 w-fit rounded border border-amber-300/50 bg-slate-900 px-4 py-2 text-sm font-semibold text-amber-200 shadow-lg"
+          />
           <button
             ref={vehicleButtonRef}
             hidden

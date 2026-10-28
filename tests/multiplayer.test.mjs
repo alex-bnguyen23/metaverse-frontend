@@ -489,6 +489,7 @@ test("characters deduplicate, own their colors and release only owned resources 
 const truck = (driverId = null, revision = 0) => ({
   id: "cybertruck-1",
   driverId,
+  passengerId: null,
   revision,
   position: { x: -35, y: 0, z: 0 },
   rotation: Math.PI / 2,
@@ -532,12 +533,24 @@ test("vehicle wire validation enforces bounds, occupants, limits and release var
   );
   assert.ok(
     protocol.parseServerMessage(
-      wire("vehicle:released", { vehicle: truck(null, 2), player: null, reason: "disconnect" }),
+      wire("vehicle:released", {
+        vehicle: truck(null, 2),
+        playerId: "a",
+        seat: "driver",
+        player: null,
+        reason: "disconnect",
+      }),
     ),
   );
   assert.equal(
     protocol.parseServerMessage(
-      wire("vehicle:released", { vehicle: truck(null, 2), player: null, reason: "exit" }),
+      wire("vehicle:released", {
+        vehicle: truck(null, 2),
+        playerId: "a",
+        seat: "driver",
+        player: null,
+        reason: "exit",
+      }),
     ),
     null,
   );
@@ -557,7 +570,7 @@ test("vehicle grants, prediction, cadence, stale leases, ordered exit and walkin
   h.session.requestEnter();
   assert.equal(socket.sent.filter((m) => m.type === "vehicle:enter").length, 1);
   assert.equal(h.session.driving, false);
-  socket.receive("vehicle:occupied", { vehicle: truck("a", 1) });
+  socket.receive("vehicle:occupied", { vehicle: truck("a", 1), playerId: "a", seat: "driver" });
   assert.equal(h.session.driving, true);
   h.session.setMovement({ position: { x: 0, y: 0, z: 0 }, rotation: 0, animation: "Run" });
   h.session.setVehicleMovement({
@@ -574,6 +587,8 @@ test("vehicle grants, prediction, cadence, stale leases, ordered exit and walkin
   socket.receive("vehicle:update", { vehicle: truck("a", 1), sequence: 0 });
   assert.equal(h.session.vehicle.position.z, 3);
   socket.receive("vehicle:released", {
+    playerId: "a",
+    seat: "driver",
     vehicle: truck(null, 0),
     player: player("a"),
     reason: "exit",
@@ -591,6 +606,8 @@ test("vehicle grants, prediction, cadence, stale leases, ordered exit and walkin
   h.tick();
   assert.equal(socket.sent.at(-1).type, "vehicle:exit");
   socket.receive("vehicle:released", {
+    playerId: "a",
+    seat: "driver",
     vehicle: { ...truck(null, 2), position: { x: -35, y: 0, z: 3 } },
     player: { ...player("a"), position: { x: -33, y: 0, z: 3 } },
     reason: "exit",
@@ -600,7 +617,7 @@ test("vehicle grants, prediction, cadence, stale leases, ordered exit and walkin
   h.session.setMovement({ position: { x: -32, y: 0, z: 3 }, rotation: 0, animation: "Walk" });
   h.tick();
   assert.equal(socket.sent.at(-1).type, "player:move");
-  socket.receive("vehicle:occupied", { vehicle: truck("b", 3) });
+  socket.receive("vehicle:occupied", { vehicle: truck("b", 3), playerId: "b", seat: "driver" });
   socket.receive("vehicle:update", {
     vehicle: { ...truck("b", 3), position: { x: -34, y: 0, z: 4 } },
     sequence: 2,
@@ -610,6 +627,8 @@ test("vehicle grants, prediction, cadence, stale leases, ordered exit and walkin
   socket.receive("vehicle:update", { vehicle: truck("a", 1), sequence: 999 });
   assert.equal(h.session.vehicle.driverId, "b");
   socket.receive("vehicle:released", {
+    playerId: "b",
+    seat: "driver",
     vehicle: truck(null, 4),
     player: null,
     reason: "disconnect",
@@ -839,7 +858,7 @@ test("rolling movement budget, stopped acknowledgement and transport backpressur
   socket.bufferedAmount = 0;
   h.tick();
   assert.equal(socket.sent.length, count + 1);
-  socket.receive("vehicle:occupied", { vehicle: truck("a", 1) });
+  socket.receive("vehicle:occupied", { vehicle: truck("a", 1), playerId: "a", seat: "driver" });
   h.session.requestExit({ x: -33, y: 0, z: 0 }, 0);
   h.tick();
   const report = socket.sent.at(-1);
@@ -980,4 +999,221 @@ test("fixed characters normalize height, map locomotion, restore rest pose and s
   characters.dispose();
   geometry.dispose();
   material.dispose();
+});
+
+test("two-seat validation rejects duplicate, missing and unknown occupants and mismatched releases", () => {
+  const both = { ...truck("a", 2), passengerId: "b" };
+  const init = (vehicle) =>
+    protocol.parseServerMessage(
+      wire("world:init", {
+        playerId: "a",
+        players: [player("a"), player("b")],
+        vehicles: [vehicle],
+      }),
+    );
+  assert.ok(init(both));
+  assert.ok(init({ ...both, driverId: null }));
+  for (const passengerId of [undefined, "a", "missing"])
+    assert.equal(init({ ...both, passengerId }), null);
+  assert.equal(
+    protocol.parseServerMessage(
+      wire("vehicle:occupied", { vehicle: both, playerId: "a", seat: "passenger" }),
+    ),
+    null,
+  );
+  assert.equal(
+    protocol.parseServerMessage(
+      wire("vehicle:released", {
+        vehicle: truck("a", 3),
+        playerId: "b",
+        seat: "passenger",
+        reason: "exit",
+        player: player("a"),
+      }),
+    ),
+    null,
+  );
+});
+
+test("passenger joins explicitly, follows reports, exits independently and resumes walking", () => {
+  const h = harness();
+  h.session.start();
+  const socket = h.sockets[0];
+  socket.open();
+  socket.receive("world:init", {
+    playerId: "a",
+    players: [player("a"), player("b")],
+    vehicles: [truck("b", 1)],
+  });
+  h.session.requestEnter("passenger");
+  assert.equal(socket.sent.at(-1).payload.seat, "passenger");
+  const both = { ...truck("b", 2), passengerId: "a" };
+  socket.receive("vehicle:occupied", { vehicle: both, playerId: "a", seat: "passenger" });
+  assert.equal(h.session.passenger, true);
+  assert.equal(h.session.driving, false);
+  h.session.setMovement({ position: { x: 0, y: 0, z: 0 }, rotation: 0, animation: "Run" });
+  h.session.setVehicleMovement({ ...both, speed: 4 });
+  h.tick();
+  assert.equal(
+    socket.sent.filter((m) => m.type === "vehicle:move" || m.type === "player:move").length,
+    0,
+  );
+  socket.receive("vehicle:update", {
+    vehicle: { ...both, position: { x: -30, y: 0, z: 0 }, speed: 4 },
+    sequence: 0,
+  });
+  assert.equal(h.session.players.get("a").position.x, -30);
+  assert.equal(h.session.requestExit({ x: -28, y: 0, z: 0 }, 0), false);
+  socket.receive("vehicle:update", {
+    vehicle: { ...both, position: { x: -30, y: 0, z: 0 } },
+    sequence: 1,
+  });
+  assert.equal(h.session.requestExit({ x: -28, y: 0, z: 0 }, 0), true);
+  h.tick();
+  assert.equal(socket.sent.at(-1).type, "vehicle:exit");
+  socket.receive("vehicle:released", {
+    vehicle: { ...truck("b", 3), position: { x: -30, y: 0, z: 0 } },
+    playerId: "a",
+    seat: "passenger",
+    reason: "exit",
+    player: { ...player("a"), position: { x: -28, y: 0, z: 0 } },
+  });
+  assert.equal(h.session.inVehicle, false);
+  assert.equal(h.session.releaseVersion, 1);
+  assert.equal(h.session.vehicle.driverId, "b");
+  h.session.setMovement({ position: { x: -27, y: 0, z: 0 }, rotation: 0, animation: "Walk" });
+  h.tick();
+  assert.equal(socket.sent.at(-1).type, "player:move");
+  h.session.stop();
+});
+
+test("passenger transition preserves pending driver exit and requires a new stopped acknowledgement", () => {
+  const h = harness();
+  h.session.start();
+  const socket = h.sockets[0];
+  socket.open();
+  socket.receive("world:init", {
+    playerId: "a",
+    players: [player("a"), player("b")],
+    vehicles: [truck("a", 1)],
+  });
+  h.tick();
+  socket.receive("vehicle:update", { vehicle: truck("a", 1), sequence: 0 });
+  h.session.requestExit({ x: -33, y: 0, z: 0 }, 0);
+  const both = { ...truck("a", 2), passengerId: "b" };
+  socket.receive("vehicle:occupied", { vehicle: both, playerId: "b", seat: "passenger" });
+  assert.equal(h.session.vehiclePending, true);
+  h.tick();
+  assert.equal(socket.sent.at(-1).type, "vehicle:move");
+  assert.equal(socket.sent.at(-1).payload.sequence, 0);
+  assert.equal(socket.sent.at(-1).payload.revision, 2);
+  assert.equal("passengerId" in socket.sent.at(-1).payload, false);
+  socket.receive("vehicle:update", { vehicle: truck("a", 1), sequence: 99 });
+  h.tick();
+  assert.equal(socket.sent.at(-1).type, "vehicle:move");
+  socket.receive("server:error", {
+    code: "STALE_VEHICLE_REVISION",
+    message: "Old epoch",
+    requestType: "vehicle:move",
+    revision: 2,
+  });
+  assert.equal(h.session.vehiclePending, true);
+  socket.receive("vehicle:update", { vehicle: both, sequence: 0 });
+  h.tick();
+  assert.equal(socket.sent.at(-1).type, "vehicle:exit");
+  assert.equal(socket.sent.at(-1).payload.revision, 2);
+  h.session.stop();
+});
+
+test("driver disconnect retains passenger, passenger disconnect retains moving driver and resets epoch", () => {
+  for (const own of ["a", "b"]) {
+    const h = harness();
+    h.session.start();
+    const socket = h.sockets[0];
+    socket.open();
+    const both = { ...truck("a", 2), passengerId: "b", speed: 4 };
+    socket.receive("world:init", {
+      playerId: own,
+      players: [player("a"), player("b")],
+      vehicles: [both],
+    });
+    h.tick();
+    if (own === "b") {
+      socket.receive("vehicle:released", {
+        vehicle: { ...both, driverId: null, speed: 0, revision: 3 },
+        playerId: "a",
+        seat: "driver",
+        reason: "disconnect",
+        player: null,
+      });
+      socket.receive("player:left", { id: "a" });
+      assert.equal(h.session.passenger, true);
+      assert.equal(h.session.driving, false);
+      assert.equal(h.session.releaseVersion, 0);
+      assert.equal(h.session.vehicle.speed, 0);
+    } else {
+      socket.receive("vehicle:released", {
+        vehicle: { ...both, passengerId: null, revision: 3 },
+        playerId: "b",
+        seat: "passenger",
+        reason: "disconnect",
+        player: null,
+      });
+      socket.receive("player:left", { id: "b" });
+      h.tick();
+      assert.equal(h.session.driving, true);
+      assert.equal(h.session.vehicle.speed, 4);
+      assert.equal(socket.sent.at(-1).payload.sequence, 0);
+      assert.equal(socket.sent.at(-1).payload.revision, 3);
+    }
+    h.session.stop();
+  }
+});
+
+test("passenger controller ignores throttle and steering, rejects moving or blocked exits", () => {
+  const { VehicleController } = loadModule("../src/vehicles/VehicleController.ts", {
+    require: () => THREE,
+  });
+  const world = new THREE.Group(),
+    root = new THREE.Group();
+  root.name = "Cybertruck_drive_control";
+  world.add(root);
+  for (let i = 0; i < 4; i++) {
+    const wheel = new THREE.Group();
+    wheel.name = "wheel_spin_" + i;
+    root.add(wheel);
+  }
+  const controller = new VehicleController(world);
+  const h = harness();
+  h.session.start();
+  const socket = h.sockets[0];
+  socket.open();
+  const both = { ...truck("b", 2), passengerId: "a", speed: 4 };
+  socket.receive("world:init", {
+    playerId: "a",
+    players: [player("a"), player("b")],
+    vehicles: [both],
+  });
+  const physics = {
+    setTruck: () => {},
+    findExit: () => null,
+    canDrive: () => {
+      throw new Error("Passenger must not simulate driving");
+    },
+  };
+  controller.update(h.session, physics, 1, 1, 0.05);
+  h.tick();
+  assert.equal(h.session.vehicle.speed, 4);
+  assert.equal(h.session.vehicle.steering, 0);
+  controller.interact(h.session, physics);
+  assert.match(h.session.vehicleError, /driver to stop/);
+  socket.receive("vehicle:update", { vehicle: { ...both, speed: 0 }, sequence: 0 });
+  controller.interact(h.session, physics);
+  assert.match(h.session.vehicleError, /No safe place/);
+  assert.equal(h.session.vehiclePending, false);
+  controller.interact(h.session, { ...physics, findExit: () => ({ x: -33, y: 0, z: 0 }) });
+  h.tick();
+  assert.equal(socket.sent.at(-1).type, "vehicle:exit");
+  assert.equal(socket.sent.filter((m) => m.type === "vehicle:move").length, 0);
+  h.session.stop();
 });

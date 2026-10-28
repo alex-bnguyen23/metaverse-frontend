@@ -38,9 +38,13 @@ These checks use a controlled WebSocket transport. They do not replace testing a
 
 ## Driving the shared Cybertruck
 
+A status badge above the truck interaction button shows "You are the driver" or "You are a passenger" after the server grants the seat. It follows confirmed occupancy and hides on exit or disconnect. Seat changes are announced politely to screen readers; movement does not repeat the announcement. Verify both roles, independent exits, disconnect/reconnect, and mobile placement with a compatible backend.
+
+The implemented frontend one-driver/one-passenger extension is specified in [VEHICLE_PASSENGER.md](VEHICLE_PASSENGER.md), including backend schemas, validation, independent exits, disconnect handling and rollout checks. It requires a compatible backend; live browser integration remains unverified. Press E near a stopped truck to drive when its driver seat is empty, or ride as passenger when only the driver is present. Both seated standing meshes are hidden and both cameras follow the truck. Passengers can exit independently only while stopped; they cannot control braking or steering. Automated coverage includes passenger validation, synchronization, release, disconnects and movement epoch resets.
+
 Driving the shared Cybertruck is implemented in the frontend using the vehicle extension in `PROTOCOLS.md`. The separate backend must include `world:init.payload.vehicles` and implement the vehicle events before driving is enabled. Older servers omitting vehicles still allow walking and chat.
 
-Approach the truck at (-35, 0, 0), then press E or tap Drive truck. Wait for the server seat grant. WASD/arrows or the touch joystick accelerate/reverse and steer relative to the vehicle; the camera orbits and follows it. Shift does not boost vehicle speed. Press E or tap Exit truck to brake and request a safe exit. If both sides are blocked, move to clear ground and try again. The standing driver model is hidden while driving.
+For the driver controls, approach the truck at (-35, 0, 0), then press E or tap Drive truck. Wait for the server seat grant. WASD/arrows or the touch joystick accelerate/reverse and steer relative to the vehicle; the camera orbits and follows it. Shift does not boost vehicle speed. Press E or tap Exit truck to brake and request a safe exit. If both sides are blocked, move to clear ground and try again. The standing driver model is hidden while driving.
 
 The truck is excluded from baked static geometry and uses a reusable moving collision box for walking. Driving tests the body and four wheel support points in substeps, rejecting water, obstacles and unsupported terrain. Steep or uneven terrain is conservatively blocked; the truck remains upright without suspension simulation. Assets are reused and physics resources are released with the world.
 
